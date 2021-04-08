@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 Collection of classes used for reading headers and data from Blackrock files
-current version: 1.3.2 --- 08/12/2016
+current version: 2.0.0 --- 04/07/2021
 
 @author: Mitch Frankel - Blackrock Microsystems
 	 Stephen Hou - v1.4.0 edits
+	 David Kluger - v2.0.0 overhaul
 
 Version History:
 v1.0.0 - 07/05/2016 - initial release - requires brMiscFxns v1.0.0
@@ -23,7 +24,7 @@ v1.3.1 - 08/02/2016 - bug fixes to NsxFile.getdata() for usability with Python 2
                       minor modifications to allow use of Python 2.6+
 v1.3.2 - 08/12/2016 - bug fixes to NsXFile.getdata()
 v1.4.0 - 06/22/2017 - inclusion of wave_read parameter to NevFile.getdata() for including/excluding waveform data
-
+v2.0.0 - xx/xx/xxxx - numpy-based architecture rebuild of NevFile.getdata()
 """
 
 
@@ -37,7 +38,7 @@ from struct      import calcsize, pack, unpack, unpack_from
 from brMiscFxns  import openfilecheck, brmiscfxns_ver
 
 # Version control set/check
-brpylib_ver        = "1.4.0"
+brpylib_ver        = "2.0.0"
 brmiscfxns_ver_req = "1.2.0"
 if brmiscfxns_ver.split('.') < brmiscfxns_ver_req.split('.'):
     raise Exception("brpylib requires brMiscFxns " + brmiscfxns_ver_req + " or higher, please use latest version")
@@ -79,7 +80,7 @@ MARKER_SIZE             = 5
 
 DIGITAL_PACKET_ID       = 0
 NEURAL_PACKET_ID_MIN    = 1
-NEURAL_PACKET_ID_MAX    = 2048
+NEURAL_PACKET_ID_MAX    = 16384
 COMMENT_PACKET_ID       = 65535
 VIDEO_SYNC_PACKET_ID    = 65534
 TRACKING_PACKET_ID      = 65533
@@ -227,7 +228,6 @@ def format_trackobjtype(header_list):
     elif trackobj_type == MARKER_SIZE:  return 'marker size'
     else:                               return 'error'
 
-
 def getdigfactor(ext_headers, idx):
     max_analog  = ext_headers[idx]['MaxAnalogValue']
     min_analog  = ext_headers[idx]['MinAnalogValue']
@@ -305,8 +305,8 @@ nev_header_dict = {
                  FieldDef('EmptyBytes',         '2s',   format_none)],          # 2 bytes  - empty
 
     'TRACKOBJ': [FieldDef('TrackableType',      'H',    format_trackobjtype),   # 2 bytes  - uint16
-                 FieldDef('TrackableID',        'H',    format_none),           # 2 bytes  - uint16
-                 FieldDef('PointCount',         'H',    format_none),           # 2 bytes  - uint16
+                 FieldDef('TrackableID',        'I',    format_none),           # 4 bytes  - uint32
+                 #FieldDef('PointCount',         'H',    format_none),           # 2 bytes  - uint16
                  FieldDef('VideoSource',        '16s',  format_stripstring),    # 16 bytes - 16 char array
                  FieldDef('EmptyBytes',         '2s',   format_none)]           # 2 bytes  - empty
 }
@@ -442,7 +442,7 @@ class NevFile:
 
     def getdata(self, elec_ids='all', wave_read='read'):
         """
-        This function is used to return a set of data from the NSx datafile.
+        This function is used to return a set of data from the NEV datafile.
 
         :param elec_ids: [optional] {list} User selection of elec_ids to extract specific spike waveforms (e.g., [13])
         :param wave_read: [optional] {STR} 'read' or 'no_read' - whether to read waveforms or not
@@ -451,9 +451,9 @@ class NevFile:
                     spike_events:          Units='nV', ChannelID, NEUEVWAV_HeaderIndices, Classification, Waveforms
                     comments:              CharSet, Flag, Data, Comment
                     video_sync_events:     VideoFileNum, VideoFrameNum, VideoElapsedTime_ms, VideoSourceID
-                    tracking_events:       ParentID, NodeID, NodeCount, PointCount, TrackingPoints
+                    tracking_events:       ParentID, NodeID, NodeCount, TrackingPoints
                     button_trigger_events: TriggerType
-                    configuration_events:  ConfigChangeType, ConfigChanged
+                    configuration_events:  ConfigChangeType
 
         Note: For digital and neural data - TimeStamps, Classification, and Data can be lists of lists when more
         than one digital type or spike event exists for a channel
@@ -461,218 +461,190 @@ class NevFile:
 
         # Initialize output dictionary and reset position in file (if read before, may not be here anymore)
         output = dict()
-        self.datafile.seek(self.basic_header['BytesInHeader'], 0)
+
 
         # Safety checks
         elec_ids = check_elecid(elec_ids)
 
-        # Must go through each data packet and process separately until end of file
-        while self.datafile.tell() != ospath.getsize(self.datafile.name):
+######
+        # extract raw data
+        self.datafile.seek(0,2)
+        lData = self.datafile.tell()
+        nPackets = int((lData-self.basic_header['BytesInHeader'])/self.basic_header['BytesInDataPackets'])
+        self.datafile.seek(self.basic_header['BytesInHeader'], 0)
+        rawdata = self.datafile.read()
+        rawdataArray = np.reshape(np.fromstring(rawdata,'B'),(nPackets,self.basic_header['BytesInDataPackets']))
 
-            time_stamp = unpack('<I', self.datafile.read(4))[0]
-            packet_id  = unpack('<H', self.datafile.read(2))[0]
+        # Find all timestamps and PacketIDs
+        if self.basic_header['FileTypeID'] == 'BREVENTS' :
+            tsBytes = 4
+        else :
+            tsBytes = 2
+        ts = np.ndarray((nPackets,),'<I',rawdata,0,(self.basic_header['BytesInDataPackets'],))
+        PacketID = np.ndarray((nPackets,),'<H',rawdata,tsBytes+2,(self.basic_header['BytesInDataPackets'],))
 
-            # skip unwanted neural data packets if only asking for certain channels
-            if not (elec_ids == 'all' or ( (packet_id in elec_ids) and
-                                           NEURAL_PACKET_ID_MIN <= packet_id <= NEURAL_PACKET_ID_MAX )):
-                self.datafile.seek(self.basic_header['BytesInDataPackets'] - 6, 1)
-                continue
+        # identify packet indices by type. if packet type is found, typecast rawdata into meaningful data arrays
+        # neural and analog input data:
+        neuralPackets = [idx for idx, element in enumerate(PacketID) if NEURAL_PACKET_ID_MIN <= element <= NEURAL_PACKET_ID_MAX]
+        if len(neuralPackets) > 0 :
+            ChannelID = PacketID
+            if type(elec_ids) is list :
+                elecindices = [idx for idx, element in enumerate(ChannelID[neuralPackets]) if element in elec_ids]
+                neuralPackets = [neuralPackets[index] for index in elecindices]
 
-            # For digital event data, read reason, skip one byte (reserved), read digital value,
-            # and skip X bytes (reserved)
-            if packet_id == DIGITAL_PACKET_ID:
+            spikeUnit = np.ndarray((nPackets,),'<B',rawdata,tsBytes+4,(self.basic_header['BytesInDataPackets'],))
+            output['spike_events'] = {'TimeStamps': list(ts[neuralPackets]),
+                                      'Unit': list(spikeUnit[neuralPackets]),
+                                      'Channel': list(ChannelID[neuralPackets])}
 
-                # See if the dictionary exists in output
-                if 'dig_events' not in output:
-                    output['dig_events'] = {'Reason': [], 'TimeStamps': [], 'Data': []}
+            if wave_read == 'read' :
+                wfs = np.ndarray((nPackets,int((self.basic_header['BytesInDataPackets']-(tsBytes+10))/2)), '<h', rawdata, tsBytes+10, (self.basic_header['BytesInDataPackets'], 2))
+                output['spike_events'].update({'Waveforms': wfs[neuralPackets,:]})
 
-                reason = unpack('B', self.datafile.read(1))[0]
-                if   reason == PARALLEL_REASON: reason = 'parallel'
-                elif reason == PERIODIC_REASON: reason = 'periodic'
-                elif reason == SERIAL_REASON:   reason = 'serial'
-                else:                           reason = 'unknown'
-                self.datafile.seek(1, 1)
+        # digital events, i.e. digital inputs and serial inputs
+        digiPackets = [idx for idx, element in enumerate(PacketID) if element == DIGITAL_PACKET_ID]
+        if len(digiPackets) > 0 :
+            insertionReason = np.ndarray((nPackets,),'<B',rawdata,tsBytes+4,(self.basic_header['BytesInDataPackets'],))
+            digiVals = np.ndarray((nPackets,),'<I',rawdata,tsBytes+6,(self.basic_header['BytesInDataPackets'],))
+            output['digital_events'] = {'TimeStamps' : list(ts[digiPackets]),
+                                        'InsertionReason' : list(insertionReason[digiPackets]),
+                                        'UnparsedData' : list(digiVals[digiPackets])}
 
-                # Check if this type of data already exists, if not, create an empty list, and then append data
-                if reason in output['dig_events']['Reason']:
-                    idx = output['dig_events']['Reason'].index(reason)
-                else:
-                    idx = -1
-                    output['dig_events']['Reason'].append(reason)
-                    output['dig_events']['TimeStamps'].append([])
-                    output['dig_events']['Data'].append([])
+        # comments + NeuroMotive events that are stored like comments
+        commentPackets = [idx for idx, element in enumerate(PacketID) if element == COMMENT_PACKET_ID]
+        if len(commentPackets) > 0 :
+            charSet = np.ndarray((nPackets,),'<B',rawdata,tsBytes+4,(self.basic_header['BytesInDataPackets'],))
+            tsStarted = np.ndarray((nPackets,),'<I',rawdata,tsBytes+6,(self.basic_header['BytesInDataPackets'],))
+            charSet = charSet[commentPackets]
+            charSetList = np.array([None] * len(charSet))
+            ANSIPackets = [idx for idx, element in enumerate(charSet) if element == CHARSET_ANSI]
+            if len(ANSIPackets) > 0 :
+                charSetList[ANSIPackets] = 'ANSI'
+            UTFPackets = [idx for idx, element in enumerate(charSet) if element == CHARSET_UTF]
+            if len(UTFPackets) > 0 :
+                charSetList[UTFPackets] = 'UTF '
 
-                output['dig_events']['TimeStamps'][idx].append(time_stamp)
-                output['dig_events']['Data'][idx].append(unpack('<H', self.datafile.read(2))[0])
+            # need to transfer comments from neuromotive. identify region of interest (ROI) events...
+            ROIPackets = [idx for idx, element in enumerate(charSet) if element == CHARSET_ROI]
 
-                # For serial data, strip off upper byte
-                if reason == 'serial':
-                    output['dig_events']['Data'][idx][-1] &= LOWER_BYTE_MASK
+            lcomment = self.basic_header['BytesInDataPackets']-tsBytes-10
+            comments = np.chararray((nPackets,lcomment), 1, False, rawdata, tsBytes + 10,(self.basic_header['BytesInDataPackets'], 1))
 
-                # For File Spec < 2.3, also capture analog Data, otherwise skip remaining packet bytes
-                if float(self.basic_header['FileSpec']) < 2.3:
-                    if 'AnalogDataUnits' not in output['dig_events']:
-                        output['dig_events']['AnalogDataUnits'] = 'mv'
+            # extract only the "true" comments, distinct from ROI packets
+            trueComments = np.setdiff1d(list(range(0,len(commentPackets)-1)),ROIPackets)
+            trueCommentsidx = np.asarray(commentPackets)[trueComments]
+            textComments = comments[trueCommentsidx]
+            textComments[:,-1] = '$'
+            stringarray = textComments.tostring()
+            stringvector = stringarray.decode('latin-1')
+            stringvector = stringvector[0:-1]
+            validstrings = stringvector.replace('\x00','')
+            commentsFinal = validstrings.split('$')
 
-                    output['dig_events']['AnalogData'].append([])
-                    for j in range(5):
-                        output['dig_events']['AnalogData'][-1].append(unpack('<h', self.datafile.read(2))[0])
-                else:
-                    self.datafile.seek(self.basic_header['BytesInDataPackets'] - 10, 1)
+            # Remove the ROI comments from the list
+            subsetInds = list(set(list(range(0, len(charSetList) - 1))) - set(ROIPackets))
 
-            # For neural waveforms, read classifier, skip one byte (reserved), and read waveform data
-            elif NEURAL_PACKET_ID_MIN <= packet_id <= NEURAL_PACKET_ID_MAX:
+            output['comments'] = {'TimeStamps' : list(ts[trueCommentsidx]),
+                                  'TimeStampsStarted' : list(tsStarted[trueCommentsidx]),
+                                  'Data' : commentsFinal,
+                                  'CharSet' : list(charSetList[subsetInds])}
 
-                # See if the dictionary exists in output, if not, create it
-                if 'spike_events' not in output:
-                    output['spike_events'] = {'Units': 'nV', 'ChannelID': [], 'TimeStamps': [],
-                                              'NEUEVWAV_HeaderIndices': [], 'Classification': [], 'Waveforms': []}
+            # parsing and outputing ROI events
+            if len(ROIPackets) > 0:
+                nmPackets = np.asarray(ROIPackets)
+                nmCommentsidx = np.asarray(commentPackets)[ROIPackets]
+                nmcomments = comments[nmCommentsidx]
+                nmcomments[:, -1] = ':'
+                nmstringarray = nmcomments.tostring()
+                nmstringvector = nmstringarray.decode('latin-1')
+                nmstringvector = nmstringvector[0:-1]
+                nmvalidstrings = nmstringvector.replace('\x00', '')
+                nmcommentsFinal = nmvalidstrings.split(':')
+                ROIfields = [l.split(':') for l in ':'.join(nmcommentsFinal).split(':')]
+                ROIfieldsRS = np.reshape(ROIfields, (len(ROIPackets), 5))
+                output['tracking_events'] = {'TimeStamps' : list(ts[nmCommentsidx]),
+                                             'ROIName' : list(ROIfieldsRS[:,0]),
+                                             'ROINumber' : list(ROIfieldsRS[:,1]),
+                                             'Event' : list(ROIfieldsRS[:,2]),
+                                             'Frame' : list(ROIfieldsRS[:,3])}
 
-                classifier = unpack('B', self.datafile.read(1))[0]
-                if classifier == UNDEFINED:          classifier = 'none'
-                elif CLASSIFIER_MIN <= classifier <= CLASSIFIER_MAX: classifier = classifier
-                elif classifier == CLASSIFIER_NOISE: classifier = 'noise'
-                else:                                classifier = 'error'
-                self.datafile.seek(1, 1)
+        # NeuroMotive video syncronization packets
+        vidsyncPackets = [idx for idx, element in enumerate(PacketID) if element == VIDEO_SYNC_PACKET_ID]
+        if len(vidsyncPackets) > 0 :
+            fileNumber = np.ndarray((nPackets,), '<H', rawdata, tsBytes + 4,
+                                         (self.basic_header['BytesInDataPackets'],))
+            frameNumber = np.ndarray((nPackets,), '<I', rawdata, tsBytes + 6,
+                                    (self.basic_header['BytesInDataPackets'],))
+            elapsedTime = np.ndarray((nPackets,), '<I', rawdata, tsBytes + 10,
+                                    (self.basic_header['BytesInDataPackets'],))
+            sourceID = np.ndarray((nPackets,), '<I', rawdata, tsBytes + 14,
+                                     (self.basic_header['BytesInDataPackets'],))
+            output['video_sync_events'] = {'TimeStamps' : list(ts[vidsyncPackets]),
+                                           'FileNumber' : list(fileNumber[vidsyncPackets]),
+                                           'FrameNumber' : list(frameNumber[vidsyncPackets]),
+                                           'ElapsedTime' : list(elapsedTime[vidsyncPackets]),
+                                           'SourceID' : list(sourceID[vidsyncPackets])}
 
-                # Check if data for this electrode exists and update parameters accordingly
-                if packet_id in output['spike_events']['ChannelID']:
-                    idx = output['spike_events']['ChannelID'].index(packet_id)
-                else:
-                    idx = -1
-                    output['spike_events']['ChannelID'].append(packet_id)
-                    output['spike_events']['TimeStamps'].append([])
-                    output['spike_events']['Classification'].append([])
+        # Neuromotive object tracking packets
+        trackingPackets = [idx for idx, element in enumerate(PacketID) if element == TRACKING_PACKET_ID]
+        if len(trackingPackets) > 0 :
+            trackerObjs = [ sub['VideoSource'] for sub in self.extended_headers if sub['PacketID'] == 'TRACKOBJ']
+            trackerIDs = [ sub['TrackableID'] for sub in self.extended_headers if sub['PacketID'] == 'TRACKOBJ']
+            output['tracking'] = {'TrackerIDs' : trackerIDs,
+                                  'TrackerTypes' : [ sub['TrackableType'] for sub in self.extended_headers if sub['PacketID'] == 'TRACKOBJ']}
+            parentID = np.ndarray((nPackets,), '<H', rawdata, tsBytes + 4, (self.basic_header['BytesInDataPackets'],))
+            nodeID = np.ndarray((nPackets,), '<H', rawdata, tsBytes + 6, (self.basic_header['BytesInDataPackets'],))
+            nodeCount = np.ndarray((nPackets,), '<H', rawdata, tsBytes + 8, (self.basic_header['BytesInDataPackets'],))
+            markerCount = np.ndarray((nPackets,), '<H', rawdata, tsBytes + 10, (self.basic_header['BytesInDataPackets'],))
+            bodyPointsX = np.ndarray((nPackets,), '<H', rawdata, tsBytes + 12, (self.basic_header['BytesInDataPackets'],))
+            bodyPointsY = np.ndarray((nPackets,), '<H', rawdata, tsBytes + 14, (self.basic_header['BytesInDataPackets'],))
 
-                    # Find neuevwav extended header for this electrode for use in calculating data info
-                    output['spike_events']['NEUEVWAV_HeaderIndices'].append(
-                        next(item for (item, d) in enumerate(self.extended_headers)
-                             if d["ElectrodeID"] == packet_id and d["PacketID"] == 'NEUEVWAV'))
+            # Need to parse by the tracker object to create clean outputs
+            R = 0
+            E = 0
+            for i in range(0,len(trackerObjs)) :
+                indices = [idx for idx, element in enumerate(nodeID[trackingPackets]) if element == i]
 
-                output['spike_events']['TimeStamps'][idx].append(time_stamp)
-                output['spike_events']['Classification'][idx].append(classifier)
+                # Static objects create single rectangles that only get sent over into the file once
+                if len(indices) == 1 :
+                    if trackerObjs[i] == 'TrackingROI' :
+                        trackerObjs[i] = trackerObjs[i] + str(R)
+                        R += 1
+                    elif trackerObjs[i] == 'EventROI' :
+                        trackerObjs[i] = trackerObjs[i] + str(E)
+                        E += 1
+                    bodyPointsX = np.ndarray((nPackets,4), '<H', rawdata, tsBytes + 12, (self.basic_header['BytesInDataPackets'],2))
+                    bodyPointsY = np.ndarray((nPackets,4), '<H', rawdata, tsBytes + 14, (self.basic_header['BytesInDataPackets'],2))
+                selectedIndices = [trackingPackets[index] for index in indices]
+                tempDict = {'TimeStamps' : list(ts[selectedIndices]),
+                            'ParentID' : list(parentID[selectedIndices]),
+                            'NodeCount' : list(nodeCount[selectedIndices]),
+                            'MarkerCount' : list(markerCount[selectedIndices]),
+                            'X' : list(bodyPointsX[selectedIndices]),
+                            'Y': list(bodyPointsY[selectedIndices])
+                            }
+                output['tracking'].update({trackerObjs[i] : tempDict})
+            output['tracking'].update({'TrackerObjs' : trackerObjs})
 
-                # Use extended header idx to get specific data information
-                ext_header_idx = output['spike_events']['NEUEVWAV_HeaderIndices'][idx]
-                samples    = self.extended_headers[ext_header_idx]['SpikeWidthSamples']
-                dig_factor = self.extended_headers[ext_header_idx]['DigitizationFactor']
-                num_bytes  = self.extended_headers[ext_header_idx]['BytesPerWaveform']
-                if num_bytes <= 1:   data_type = np.int8
-                elif num_bytes == 2: data_type = np.int16
+        # patient trigger events
+        buttonPackets = [idx for idx, element in enumerate(PacketID) if element == BUTTON_PACKET_ID]
+        if len(buttonPackets) > 0 :
+            trigType = np.ndarray((nPackets,), '<H', rawdata, tsBytes + 4, (self.basic_header['BytesInDataPackets'],))
+            output['PatientTrigger'] = {'TimeStamps' : list(ts[buttonPackets]),
+                                        'TriggerType' : list(trigType[buttonPackets])
+                                        }
 
-				# If reading waveforms, read waveform data and populate the waveforms dictionary field 
-                if wave_read == 'read':
-                    if idx == -1:
-                        output['spike_events']['Waveforms'].append(
-                            [np.fromfile(file=self.datafile, dtype=data_type, count=samples).astype(np.int32) * dig_factor])
-                    else:
-                        output['spike_events']['Waveforms'][idx] = \
-                            np.append(output['spike_events']['Waveforms'][idx],
-                                      [np.fromfile(file=self.datafile, dtype=data_type, count=samples).astype(np.int32) *
-                                       dig_factor], axis=0)
-                # If not reading waveforms, skip bytes corresponding to the waveform data
-                elif wave_read == 'noread':
-                    if idx == -1:
-                        self.datafile.seek(self.basic_header['BytesInDataPackets'] - 8,1)
-                    else:
-                        self.datafile.seek(self.basic_header['BytesInDataPackets'] - 8,1)
-
-            # For comment events
-            elif packet_id == COMMENT_PACKET_ID:
-
-                # See if the dictionary exists in output, if not, create it
-                if 'comments' not in output:
-                    output['comments'] = {'TimeStamps': [], 'CharSet': [], 'Flag': [], 'Data': [], 'Comment': []}
-
-                output['comments']['TimeStamps'].append(time_stamp)
-
-                char_set = unpack('B', self.datafile.read(1))[0]
-                if char_set == CHARSET_ANSI:  output['comments']['CharSet'].append('ANSI')
-                elif char_set == CHARSET_UTF: output['comments']['CharSet'].append('UTF-16')
-                elif char_set == CHARSET_ROI: output['comments']['CharSet'].append('NeuroMotive ROI')
-                else:                         output['comments']['CharSet'].append('error')
-
-                comm_flag = unpack('B', self.datafile.read(1))[0]
-                if comm_flag == COMM_RGBA:   output['comments']['Flag'].append('RGBA color code')
-                elif comm_flag == COMM_TIME: output['comments']['Flag'].append('timestamp')
-                else:                        output['comments']['Flag'].append('error')
-
-                output['comments']['Data'].append(unpack('<I', self.datafile.read(4))[0])
-
-                samples = self.basic_header['BytesInDataPackets'] - 12
-                comm_string = bytes.decode(self.datafile.read(samples), 'latin-1')
-                output['comments']['Comment'].append(comm_string.split(STRING_TERMINUS, 1)[0])
-
-            # For video sync event
-            elif packet_id == VIDEO_SYNC_PACKET_ID:
-
-                # See if the dictionary exists in output, if not, create it
-                if 'video_sync_events' not in output:
-                    output['video_sync_events'] = {'TimeStamps': [], 'VideoFileNum': [], 'VideoFrameNum': [],
-                                                   'VideoElapsedTime_ms': [], 'VideoSourceID': []}
-
-                output['video_sync_events']['TimeStamps'].append(          time_stamp)
-                output['video_sync_events']['VideoFileNum'].append(        unpack('<H', self.datafile.read(2))[0])
-                output['video_sync_events']['VideoFrameNum'].append(       unpack('<I', self.datafile.read(4))[0])
-                output['video_sync_events']['VideoElapsedTime_ms'].append( unpack('<I', self.datafile.read(4))[0])
-                output['video_sync_events']['VideoSourceID'].append(       unpack('<I', self.datafile.read(4))[0])
-                self.datafile.seek((self.basic_header['BytesInDataPackets'] - 20), 1)
-
-            # For tracking event
-            elif packet_id == TRACKING_PACKET_ID:
-
-                # See if the dictionary exists in output, if not, create it
-                if 'tracking_events' not in output:
-                    output['tracking_events'] = {'TimeStamps': [], 'ParentID': [], 'NodeID': [], 'NodeCount': [],
-                                                 'PointCount': [], 'TrackingPoints': []}
-
-                output['tracking_events']['TimeStamps'].append( time_stamp)
-                output['tracking_events']['ParentID'].append(   unpack('<H', self.datafile.read(2))[0])
-                output['tracking_events']['NodeID'].append(     unpack('<H', self.datafile.read(2))[0])
-                output['tracking_events']['NodeCount'].append(  unpack('<H', self.datafile.read(2))[0])
-                output['tracking_events']['PointCount'].append( unpack('<H', self.datafile.read(2))[0])
-                samples = (self.basic_header['BytesInDataPackets'] - 14) // 2
-                output['tracking_events']['TrackingPoints'].append(
-                    np.fromfile(file=self.datafile, dtype=np.uint16, count=samples))
-
-            # For button trigger event
-            elif packet_id == BUTTON_PACKET_ID:
-
-                # See if the dictionary exists in output, if not, create it
-                if 'button_trigger_events' not in output:
-                    output['button_trigger_events'] = {'TimeStamps': [], 'TriggerType': []}
-
-                output['button_trigger_events']['TimeStamps'].append(time_stamp)
-                trigger_type = unpack('<H', self.datafile.read(2))[0]
-                if trigger_type == UNDEFINED:      output['button_trigger_events']['TriggerType'].append('undefined')
-                elif trigger_type == BUTTON_PRESS: output['button_trigger_events']['TriggerType'].append('button press')
-                elif trigger_type == BUTTON_RESET: output['button_trigger_events']['TriggerType'].append('event reset')
-                else:                              output['button_trigger_events']['TriggerType'].append('error')
-                self.datafile.seek((self.basic_header['BytesInDataPackets'] - 8), 1)
-
-            # For configuration log event
-            elif packet_id == CONFIGURATION_PACKET_ID:
-
-                # See if the dictionary exists in output, if not, create it
-                if 'configuration_events' not in output:
-                    output['configuration_events'] = {'TimeStamps': [], 'ConfigChangeType': [], 'ConfigChanged': []}
-
-                output['configuration_events']['TimeStamps'].append(time_stamp)
-                change_type = unpack('<H', self.datafile.read(2))[0]
-                if change_type == CHG_NORMAL:     output['configuration_events']['ConfigChangeType'].append('normal')
-                elif change_type == CHG_CRITICAL: output['configuration_events']['ConfigChangeType'].append('critical')
-                else:                             output['configuration_events']['ConfigChangeType'].append('error')
-
-                samples = self.basic_header['BytesInDataPackets'] - 8
-                output['configuration_events']['ConfigChanged'].append(unpack(('<' + str(samples) + 's'),
-                                                                              self.datafile.read(samples))[0])
-
-            # Otherwise, packet unknown, skip to next packet
-            else:  self.datafile.seek((self.basic_header['BytesInDataPackets'] - 6), 1)
+        # configuration packets
+        configPackets = [idx for idx, element in enumerate(PacketID) if element == CONFIGURATION_PACKET_ID]
+        if len(configPackets) > 0 :
+            changeType = np.ndarray((nPackets,), '<H', rawdata, tsBytes + 4, (self.basic_header['BytesInDataPackets'],))
+            output['reconfig'] = {'TimeStamps' : list(ts[configPackets]),
+                                  'ChangeType' : list(ts[configPackets])
+                                  }
 
         return output
 
-    def processroicomments(self, comments):
+    def processroicomments(self, comments):     # obsolete in v2.0.0+, ROI comments come out parsed from NevFile.getdata()
         """
         used to process the comment data packets associated with NeuroMotive region of interest enter/exit events.
         requires that read_data() has already been run.
