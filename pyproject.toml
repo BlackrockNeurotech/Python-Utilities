@@ -11,7 +11,7 @@ authors = [{ name = "Blackrock Neurotech", email = "support@blackrockneuro.com" 
 dependencies = [
     "numpy",
     "qtpy",
-    "pyqt5"
+    "pyside6_essentials"
 ]
 dynamic = ["version"]
 
