@@ -10,8 +10,11 @@ v1.1.0 - 07/12/2016 - minor editing changes to print statements and addition of 
 v1.2.0 - 08/04/2016 - minor modifications to allow use of Python 2.6+
 """
 from os import getcwd, path
-
-from qtpy.QtWidgets import QApplication, QFileDialog
+try:
+    from qtpy.QtWidgets import QApplication, QFileDialog
+    HAS_QT = True
+except ModuleNotFoundError:
+    HAS_QT = False
 
 # Version control
 brmiscfxns_ver = "1.2.0"
@@ -34,6 +37,8 @@ def openfilecheck(open_mode, file_name="", file_ext="", file_type=""):
 
     while True:
         if not file_name:  # no file name passed
+            if not HAS_QT:
+                raise ModuleNotFoundError("Qt required for file dialog. Install PySide + qtpy or provide file_name.")
 
             # Ask user to specify a file path or browse
             file_name = input(
