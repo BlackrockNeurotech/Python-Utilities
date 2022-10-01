@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "brpylib"
+description = "Blackrock Neurotech Python utilities"
+readme = "README.md"
+authors = [{ name = "Blackrock Neurotech", email = "support@blackrockneuro.com" }]
+
+dependencies = [
+    "numpy",
+    "qtpy",
+    "pyside6_essentials; python_version>='3.6'",
+    "pyside2; python_version<'3.6'"
+]
+dynamic = ["version"]
+
+[project.urls]
+Repository = "https://github.com/BlackrockNeurotech/Python-Utilities"
+Homepage = "https://blackrockneurotech.com/research/support/#manuals-and-software-downloads"
+
+[tool.setuptools.dynamic]
+version = {attr = "brpylib.brpylib.brpylib_ver"}
+

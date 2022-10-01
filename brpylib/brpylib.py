@@ -40,7 +40,7 @@ from struct import calcsize, pack, unpack, unpack_from
 
 import numpy as np
 
-from brMiscFxns import brmiscfxns_ver, openfilecheck
+from .brMiscFxns import brmiscfxns_ver, openfilecheck
 
 # Version control set/check
 brpylib_ver = "2.0.1"

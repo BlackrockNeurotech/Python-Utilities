@@ -18,7 +18,7 @@ v1.1.1 - 07/22/2016 - now uses 'samp_per_sec' as returned by NsxFile.getdata()
 import matplotlib.pyplot as plt
 import argparse
 from numpy               import arange
-from brpylib             import NsxFile, brpylib_ver
+from brpylib.brpylib     import NsxFile, brpylib_ver
 
 
 def main(datafile=None, start_time_s=1.0, plot_chan=5):
