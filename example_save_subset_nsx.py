@@ -14,7 +14,7 @@ v1.1.1 - 07/22/2016 - minor modifications to use close() functionality of NsxFil
 """
 
 # Imports
-from brpylib.brpylib import NsxFile, brpylib_ver
+from brpylib import NsxFile, brpylib_ver
 
 # Version control
 brpylib_ver_req = "1.2.1"
