@@ -2,3 +2,4 @@
 __pycache__
 .vscode
 *.swp
+.DS_Store
