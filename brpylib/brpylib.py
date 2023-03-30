@@ -27,6 +27,7 @@ v1.4.0 - 06/22/2017 - inclusion of wave_read parameter to NevFile.getdata() for 
 v2.0.0 - 04/27/2021 - numpy-based architecture rebuild of NevFile.getdata()
 v2.0.1 - 11/12/2021 - fixed indexing error in NevFile.getdata()
                       Added numpy architecture to NsxFile.getdata()
+v2.0.2 - 03/21/2023 - added logic for case where PTP timestamps are applied to every continuous sample in NSx files
 """
 
 
@@ -43,7 +44,7 @@ import numpy as np
 from .brMiscFxns import brmiscfxns_ver, openfilecheck
 
 # Version control set/check
-brpylib_ver = "2.0.1"
+brpylib_ver = "2.0.2"
 brmiscfxns_ver_req = "1.2.0"
 if brmiscfxns_ver.split(".") < brmiscfxns_ver_req.split("."):
     raise Exception(
@@ -78,6 +79,7 @@ NSX_BASIC_HEADER_BYTES_22 = 314
 NSX_EXT_HEADER_BYTES_22 = 66
 DATA_BYTE_SIZE = 2
 TIMESTAMP_NULL_21 = 0
+MAX_SAMP_PER_S = 30000
 
 NO_FILTER = 0
 BUTTER_FILTER = 1
@@ -640,12 +642,12 @@ class NevFile:
                 wfs = np.ndarray(
                     (
                         nPackets,
-                        int((self.basic_header["BytesInDataPackets"] - (tsBytes + 4))),
+                        int((self.basic_header["BytesInDataPackets"] - (tsBytes + 4))/2),
                     ),
                     "<h",
                     rawdata,
                     tsBytes + 4,
-                    (self.basic_header["BytesInDataPackets"], 0),
+                    (self.basic_header["BytesInDataPackets"], 2),
                 )
                 output["spike_events"].update({"Waveforms": wfs[neuralPackets, :]})
 
@@ -1034,7 +1036,7 @@ class NsxFile:
                 processheaders(self.datafile, nsx_header_dict["basic_21"])
             )
             self.basic_header["FileSpec"] = "2.1"
-            self.basic_header["TimeStampResolution"] = 30000
+            self.basic_header["TimeStampResolution"] = MAX_SAMP_PER_S
             self.basic_header["BytesInHeader"] = (
                 32 + 4 * self.basic_header["ChannelCount"]
             )
@@ -1110,7 +1112,7 @@ class NsxFile:
         analog_input_idx_cont = True
         hit_start = False
         hit_stop = False
-        d_ptr = {"BoH": [], "BoD": []}
+        d_ptr = {"BoH": [], "BoD": [], "EoF": []}
         # Move file position to start of datafile (if read before, may not be here anymore)
         self.datafile.seek(self.basic_header["BytesInHeader"], 0)
 
@@ -1174,61 +1176,123 @@ class NsxFile:
             timestamp = TIMESTAMP_NULL_21
             num_data_pts = output["data_headers"][0]["NumDataPoints"]
         else:
-            while self.datafile.tell() < ospath.getsize(self.datafile.name):
-                d_ptr["BoH"].append(self.datafile.tell())
-                self.datafile.seek(1, 1)
-                if self.basic_header["FileSpec"] == "3.0":
-                    timestamp = unpack("<Q", self.datafile.read(8))[0]
-                else:
-                    timestamp = unpack("<I", self.datafile.read(4))[0]
-                num_data_pts = unpack("<I", self.datafile.read(4))[0]
-                d_ptr["BoD"].append(self.datafile.tell())
+            ptpfix = False
+            eoh = self.datafile.tell()
+            self.datafile.seek(0, 2)
+            eof = self.datafile.tell()
+            PacketSize = 1 + 8 + 4 + self.basic_header["ChannelCount"] * 2
+            npackets = int((eof - eoh) / PacketSize)
+            self.datafile.seek(eoh, 0)
+            datapointtest = np.ndarray(
+                (npackets,),
+                '<I',
+                self.datafile.read(),
+                calcsize('b') + calcsize('<Q'),
+                PacketSize,
+            )
+            self.datafile.seek(eoh, 0)
+            if sum(datapointtest) == len(datapointtest):
+                ptpfix = True
+            if not ptpfix:
+                while self.datafile.tell() < ospath.getsize(self.datafile.name):
+                    d_ptr["BoH"].append(self.datafile.tell())
+                    self.datafile.seek(1, 1)
+                    if self.basic_header["FileSpec"] == "3.0":
+                        timestamp = unpack("<Q", self.datafile.read(8))[0]
+                    else:
+                        timestamp = unpack("<I", self.datafile.read(4))[0]
+                    num_data_pts = unpack("<I", self.datafile.read(4))[0]
+                    datalength = num_data_pts * self.basic_header["Period"] / self.basic_header["TimeStampResolution"]
+                    d_ptr["BoD"].append(self.datafile.tell())
+                    output["data_headers"].append(
+                        {"Timestamp": timestamp, "NumDataPoints": num_data_pts, "data_time_s": datalength}
+                    )
+                    self.datafile.seek(
+                        num_data_pts * self.basic_header["ChannelCount"] * DATA_BYTE_SIZE, 1
+                    )
+            else:
+                self.datafile.seek(eoh, 0)
+                rawdata = self.datafile.read()
+                timestamps = np.ndarray(
+                    (npackets, ),
+                    '<Q',
+                    rawdata,
+                    calcsize('<b'),
+                    PacketSize,
+                )
+                datapoints = np.ndarray(
+                    (npackets, ),
+                    '<I',
+                    rawdata,
+                    calcsize('b')+calcsize('<Q'),
+                    PacketSize,
+                )
                 output["data_headers"].append(
-                    {"Timestamp": timestamp, "NumDataPoints": num_data_pts}
+                    {"Timestamp": timestamps, "NumDataPoints": datapoints}
                 )
-                self.datafile.seek(
-                    num_data_pts * self.basic_header["ChannelCount"] * DATA_BYTE_SIZE, 1
+                output["data"].append(
+                    np.ndarray(
+                        (num_elecs, npackets),
+                        '<h',
+                        rawdata,
+                        calcsize('b')+calcsize('<Q')+calcsize('<I'),
+                        (calcsize('<h'), PacketSize),
+                    )
                 )
+                output['data_time_s'] = (timestamps[-1] - timestamps[0]) / self.basic_header['TimeStampResolution']
+
 
         # stop_idx_output = ceil(timestamp / self.basic_header['Period']) + num_data_pts
         # if data_time_s != DATA_TIME_DEF and stop_idx < stop_idx_output:  stop_idx_output = stop_idx
         # total_samps = int(ceil((stop_idx_output - start_idx) / downsample))
         for x in range(len(output["data_headers"])):
-            if (
-                output["data_headers"][x]["NumDataPoints"]
-                * self.basic_header["ChannelCount"]
-                * DATA_BYTE_SIZE
-            ) > DATA_PAGING_SIZE:
-                print(
-                    "\nOutput data requested is larger than 1 GB, attempting to preallocate output now"
+            try:
+                output["data_headers"][x]["NumDataPoints"] != 1
+                if (
+                    output["data_headers"][x]["NumDataPoints"]
+                    * self.basic_header["ChannelCount"]
+                    * DATA_BYTE_SIZE
+                ) > DATA_PAGING_SIZE:
+                    print(
+                        "\nOutput data requested is larger than 1 GB, attempting to preallocate output now"
+                    )
+                # If data output is bigger than available, let user know this is too big and they must request at least one of:
+                # subset of electrodes, subset of data, or use savensxsubset to smaller file sizes, otherwise, pre-allocate data
+                self.datafile.seek(d_ptr["BoD"][x])
+                data_length = output["data_headers"][x]["NumDataPoints"]
+                recorded_data_bytes = data_length * num_elecs * DATA_BYTE_SIZE
+                recorded_data = self.datafile.read(recorded_data_bytes)
+                if zeropad is True:
+                    padsize = ceil(
+                        output["data_headers"][x]["Timestamp"] / self.basic_header["Period"]
+                    )
+                    data_length += padsize
+                    zero_array = bytes(np.zeros((padsize * num_elecs, 1), dtype=np.short))
+                try:
+                    np.zeros((data_length, num_elecs), dtype=np.short)
+                except MemoryError as err:
+                    err.args += (
+                        " Output data size requested is larger than available memory. Use the parameters\n"
+                        "              for getdata(), e.g., 'elec_ids', to request a subset of the data or use\n"
+                        "              NsxFile.savesubsetnsx() to create subsets of the main nsx file\n",
+                    )
+                    raise
+                if zeropad is True:  # broken for PTP time. Generally just a bad idea to zeropad PTP-based data
+                    recorded_data = zero_array + recorded_data
+                output["data"].append(
+                    np.ndarray((data_length, num_elecs), "<h", recorded_data)
                 )
 
-            # If data output is bigger than available, let user know this is too big and they must request at least one of:
-            # subset of electrodes, subset of data, or use savensxsubset to smaller file sizes, otherwise, pre-allocate data
-            self.datafile.seek(d_ptr["BoD"][x])
-            data_length = output["data_headers"][x]["NumDataPoints"]
-            recorded_data_bytes = data_length * num_elecs * DATA_BYTE_SIZE
-            recorded_data = self.datafile.read(recorded_data_bytes)
-            if zeropad is True:
-                padsize = ceil(
-                    output["data_headers"][x]["Timestamp"] / self.basic_header["Period"]
-                )
-                data_length += padsize
-                zero_array = bytes(np.zeros((padsize * num_elecs, 1), dtype=np.short))
-            try:
-                np.zeros((data_length, num_elecs), dtype=np.short)
-            except MemoryError as err:
-                err.args += (
-                    " Output data size requested is larger than available memory. Use the parameters\n"
-                    "              for getdata(), e.g., 'elec_ids', to request a subset of the data or use\n"
-                    "              NsxFile.savesubsetnsx() to create subsets of the main nsx file\n",
-                )
-                raise
-            if zeropad is True:
-                recorded_data = zero_array + recorded_data
-            output["data"].append(
-                np.ndarray((data_length, num_elecs), "<h", recorded_data)
-            )
+                output['samp_per_s'] = MAX_SAMP_PER_S / self.basic_header['Period']
+            except:
+                if (
+                    len(output["data_headers"][x]["NumDataPoints"])
+                    * self.basic_header["ChannelCount"]
+                    * DATA_BYTE_SIZE
+                ) > DATA_PAGING_SIZE:
+                    print(
+                        "\nOutput data requested is larger than 1 GB, attempting to preallocate output now"
+                    )
 
             # Reset file position to start of data header #1, loop through all data packets, process header, and add data
         #     self.datafile.seek(self.basic_header['BytesInHeader'], 0)
@@ -1388,6 +1452,22 @@ class NsxFile:
 
         return output
 
+    def samplealign(
+            self,
+            elec_ids="all",
+            start_time_s=0,
+            data_time_s="all",
+            downsample=1,
+            zeropad=False,
+            ):
+        nsx = self.getdata(elec_ids, start_time_s, data_time_s, downsample, zeropad)
+        ts_all = nsx['data_headers'][0]['Timestamp']
+        ts_diff = np.diff(ts_all)
+        segmentids = np.argwhere(ts_diff > 2 * self.basic_header['TimeStampResolution'] / MAX_SAMP_PER_S * self.basic_header['Period'])
+        nsegments = len(segmentids)
+        output = 0
+
+        return output
     def savesubsetnsx(
         self, elec_ids="all", file_size=None, file_time_s=None, file_suffix=""
     ):
