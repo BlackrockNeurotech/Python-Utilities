@@ -1453,7 +1453,7 @@ class NsxFile:
 
         return output
 
-    def samplealign(
+    def getaligneddata(
             self,
             elec_ids="all",
             start_time_s=0,
