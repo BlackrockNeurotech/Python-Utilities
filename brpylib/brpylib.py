@@ -27,7 +27,8 @@ v1.4.0 - 06/22/2017 - inclusion of wave_read parameter to NevFile.getdata() for 
 v2.0.0 - 04/27/2021 - numpy-based architecture rebuild of NevFile.getdata()
 v2.0.1 - 11/12/2021 - fixed indexing error in NevFile.getdata()
                       Added numpy architecture to NsxFile.getdata()
-v2.0.2 - 03/21/2023 - added logic for case where PTP timestamps are applied to every continuous sample in NSx files
+v2.0.2 - 03/21/2023 - added logic to NsxFile.getdata() for where PTP timestamps are applied to every continuous sample
+                      created method 'samplealign' in class NsxFile
 """
 
 
@@ -1461,13 +1462,45 @@ class NsxFile:
             zeropad=False,
             ):
         nsx = self.getdata(elec_ids, start_time_s, data_time_s, downsample, zeropad)
+        # initialize parameters
+        output = dict()
+        output["elec_ids"] = nsx['elec_ids']
+        output["start_time_s"] = nsx["start_time_s"]
+        output["data_time_s"] = nsx['data_time_s']
+        output["downsample"] = nsx['downsample']
+        output["data"] = []
+        output["data_headers"] = {'Timestamp': [], 'NumDataPoints': []}
+        output["ExtendedHeaderIndices"] = []
         ts_all = nsx['data_headers'][0]['Timestamp']
         ts_diff = np.diff(ts_all)
-        segmentids = np.argwhere(ts_diff > 2 * self.basic_header['TimeStampResolution'] / MAX_SAMP_PER_S * self.basic_header['Period'])
-        nsegments = len(segmentids)
-        output = 0
+        ts_diff = np.insert(ts_diff, 0, ts_diff[0])
+        segmentinds = np.argwhere(ts_diff > 2 * self.basic_header['TimeStampResolution'] / MAX_SAMP_PER_S * self.basic_header['Period'])
+        segmentinds = np.insert(segmentinds, 0, 0)
+        segmentinds = np.append(segmentinds, len(ts_all)-1)
+        segments = [[segmentinds[x], segmentinds[x+1]-1] for x in range(len(segmentinds)-1)]
+
+        for s in range(len(segments)):
+            tempdata = nsx['data'][0][:, range(segments[s][0], segments[s][1])]
+            dur = np.diff(ts_all[segments[s]])
+            npoints = int(np.diff(segments[s]))
+            alignRatio = dur / npoints / self.basic_header['TimeStampResolution'] * MAX_SAMP_PER_S / self.basic_header['Period']
+            addedsamples = int(np.round((alignRatio - 1) * np.diff(segments[s]), 0))
+            gap = int(npoints / abs(addedsamples))
+            intervals = [int(npoints - gap/2 - x*gap) for x in range(abs(addedsamples))]
+            if addedsamples > 1:
+                for x in intervals:
+                    tempdata = np.insert(tempdata, x, tempdata[:, x], 1)
+            elif addedsamples < 1:
+                for x in intervals:
+                    tempdata = np.remove(tempdata, x, tempdata[:, x], 1)
+
+            output['data'].append(tempdata)
+            output['data_headers']['Timestamp'].append( ts_all[segments[s][0]])
+            output['data_headers']['NumDataPoints'].append(int(npoints + addedsamples))
+
 
         return output
+
     def savesubsetnsx(
         self, elec_ids="all", file_size=None, file_time_s=None, file_suffix=""
     ):
