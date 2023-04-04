@@ -28,7 +28,7 @@ v2.0.0 - 04/27/2021 - numpy-based architecture rebuild of NevFile.getdata()
 v2.0.1 - 11/12/2021 - fixed indexing error in NevFile.getdata()
                       Added numpy architecture to NsxFile.getdata()
 v2.0.2 - 03/21/2023 - added logic to NsxFile.getdata() for where PTP timestamps are applied to every continuous sample
-                      created method 'samplealign' in class NsxFile
+                      created method 'getaligneddata' in class NsxFile
 """
 
 
