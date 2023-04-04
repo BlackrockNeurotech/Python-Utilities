@@ -42,7 +42,7 @@ from struct import calcsize, pack, unpack, unpack_from
 
 import numpy as np
 
-from .brMiscFxns import brmiscfxns_ver, openfilecheck
+from brMiscFxns import brmiscfxns_ver, openfilecheck
 
 # Version control set/check
 brpylib_ver = "2.0.2"
@@ -1461,7 +1461,34 @@ class NsxFile:
             downsample=1,
             zeropad=False,
             ):
+        """
+        getaligneddata() has the same syntax as getdata(). It uses the PTP timestamps in the data to align to the
+        expected sampling rate of the file. getaligneddata() also resegments the data.
+        getaligneddata() will throw an error if the file does not have a timestamp for each data segment.
+        :param elec_ids:      [optional] {list}  List of elec_ids to extract (e.g., [13])
+        :param start_time_s:  [optional] {float} Starting time for data extraction (e.g., 1.0)
+        :param data_time_s:   [optional] {float} Length of time of data to return (e.g., 30.0)
+        :param downsample:    [optional] {int}   Downsampling factor (e.g., 2)
+        :return: output:      {Dictionary} of:  data_headers: {list}        dictionaries of all data headers
+                                                elec_ids:     {list}        elec_ids that were extracted (sorted)
+                                                start_time_s: {float}       starting time for data extraction
+                                                data_time_s:  {float}       length of time of data returned
+                                                downsample:   {int}         data downsampling factor
+                                                samp_per_s:   {float}       output data samples per second
+                                                data:         {numpy array} continuous data in a 2D numpy array
+
+        Parameters: elec_ids, start_time_s, data_time_s, and downsample are not mandatory.  Defaults will assume all
+        electrodes and all data points starting at time(0) are to be read. Data is returned as a numpy 2d array
+        with each row being the data set for each electrode (e.g. output['data'][0] for output['elec_ids'][0]).
+        """
+
         nsx = self.getdata(elec_ids, start_time_s, data_time_s, downsample, zeropad)
+        try:
+            len(nsx['data_headers'][0]['NumDataPoints']) != sum(nsx['data_headers'][0]['NumDataPoints'])
+        except Exception as err:
+            print(self.datafile.name, 'does not need to be aligned. Use getdata() instead.')
+            raise SystemExit(err)
+
         # initialize parameters
         output = dict()
         output["elec_ids"] = nsx['elec_ids']
@@ -1472,6 +1499,7 @@ class NsxFile:
         output["data_headers"] = {'Timestamp': [], 'NumDataPoints': []}
         output["ExtendedHeaderIndices"] = []
         ts_all = nsx['data_headers'][0]['Timestamp']
+        # Find segments and generate them into lists
         ts_diff = np.diff(ts_all)
         ts_diff = np.insert(ts_diff, 0, ts_diff[0])
         segmentinds = np.argwhere(ts_diff > 2 * self.basic_header['TimeStampResolution'] / MAX_SAMP_PER_S * self.basic_header['Period'])
@@ -1479,6 +1507,7 @@ class NsxFile:
         segmentinds = np.append(segmentinds, len(ts_all)-1)
         segments = [[segmentinds[x], segmentinds[x+1]-1] for x in range(len(segmentinds)-1)]
 
+        # In all identified segments, find the number of frames to add/remove
         for s in range(len(segments)):
             tempdata = nsx['data'][0][:, range(segments[s][0], segments[s][1])]
             dur = np.diff(ts_all[segments[s]])
@@ -1486,6 +1515,8 @@ class NsxFile:
             alignRatio = dur / npoints / self.basic_header['TimeStampResolution'] * MAX_SAMP_PER_S / self.basic_header['Period']
             addedsamples = int(np.round((alignRatio - 1) * np.diff(segments[s]), 0))
             gap = int(npoints / abs(addedsamples))
+
+            # identify where in the segments the data should be added or removed
             intervals = [int(npoints - gap/2 - x*gap) for x in range(abs(addedsamples))]
             if addedsamples > 1:
                 for x in intervals:
@@ -1494,8 +1525,9 @@ class NsxFile:
                 for x in intervals:
                     tempdata = np.remove(tempdata, x, tempdata[:, x], 1)
 
+            # Regenerate the output
             output['data'].append(tempdata)
-            output['data_headers']['Timestamp'].append( ts_all[segments[s][0]])
+            output['data_headers']['Timestamp'].append(ts_all[segments[s][0]])
             output['data_headers']['NumDataPoints'].append(int(npoints + addedsamples))
 
 
