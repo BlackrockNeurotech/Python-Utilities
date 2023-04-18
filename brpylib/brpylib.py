@@ -15,7 +15,7 @@ v1.1.1 - 07/09/2016 - update to NsxFile.savesubsetnsx() for option (not)overwrit
 v1.2.0 - 07/12/2016 - bug fixes in NsxFile.savesubsetnsx()
                       added version control and checking for brMiscFxns
                       requires brMiscFxns v1.1.0
-v1.3.0 - 07/22/2016 - added "samp_per_s" to NsxFile.getdata") outp"t
+v1.3.0 - 07/22/2016 - added 'samp_per_s' to NsxFile.getdata() output
                       added close() method to NsxFile and NevFile objects
                       NsxFile.getdata() now pre-allocates output['data'] as zeros - speed and safety
 v1.3.1 - 08/02/2016 - bug fixes to NsxFile.getdata() for usability with Python 2.7 as reported from beta user
