@@ -15,7 +15,7 @@ v1.1.1 - 07/09/2016 - update to NsxFile.savesubsetnsx() for option (not)overwrit
 v1.2.0 - 07/12/2016 - bug fixes in NsxFile.savesubsetnsx()
                       added version control and checking for brMiscFxns
                       requires brMiscFxns v1.1.0
-v1.3.0 - 07/22/2016 - added 'samp_per_s' to NsxFile.getdata() output
+v1.3.0 - 07/22/2016 - added "samp_per_s" to NsxFile.getdata") outp"t
                       added close() method to NsxFile and NevFile objects
                       NsxFile.getdata() now pre-allocates output['data'] as zeros - speed and safety
 v1.3.1 - 08/02/2016 - bug fixes to NsxFile.getdata() for usability with Python 2.7 as reported from beta user
@@ -462,10 +462,16 @@ def check_datatime(data_time_s):
 def check_downsample(downsample):
     if not isinstance(downsample, int) or downsample < DOWNSAMPLE_DEF:
         print(
-            "\n*** WARNING: Downsample must be an integer value greater than 0. "
+            "\n*** WARNING: downsample must be an integer value greater than 0. "
             "      Setting downsample to 1 (no downsampling)"
         )
         downsample = DOWNSAMPLE_DEF
+    if downsample > 1:
+        print(
+            "\n*** WARNING: downsample will be deprecated in a future version."
+            "      Set downsample to 1 (default) to match future behavior."
+            "\n*** WARNING: downsample does not perform anti-aliasing."
+        )
     return downsample
 
 
@@ -1031,6 +1037,8 @@ class NsxFile:
         # Determine File ID to determine if File Spec 2.1
         self.basic_header["FileTypeID"] = bytes.decode(self.datafile.read(8), "latin-1")
 
+        self.basic_header["SampleResolution"] = MAX_SAMP_PER_S  # Might come from the file some day.
+
         # Extract basic and extended header information based on File Spec
         if self.basic_header["FileTypeID"] == "NEURALSG":
             self.basic_header.update(
@@ -1060,217 +1068,215 @@ class NsxFile:
 
     def getdata(
         self,
-        elec_ids="all",
+        elec_ids=ELEC_ID_DEF,
         start_time_s=0,
-        data_time_s="all",
+        data_time_s=DATA_TIME_DEF,
         downsample=1,
         zeropad=False,
+        full_timestamps=False,
+        elec_rows=True,
+        force_srate=False
     ):
         """
         This function is used to return a set of data from the NSx datafile.
 
-        :param elec_ids:      [optional] {list}  List of elec_ids to extract (e.g., [13])
-        :param start_time_s:  [optional] {float} Starting time for data extraction (e.g., 1.0)
-        :param data_time_s:   [optional] {float} Length of time of data to return (e.g., 30.0)
-        :param downsample:    [optional] {int}   Downsampling factor (e.g., 2)
-        :return: output:      {Dictionary} of:  data_headers: {list}        dictionaries of all data headers
+        :param elec_ids:      [optional] {list}  List of elec_ids to extract (e.g., [13]) or "all". Default: "all"
+        :param start_time_s:  [optional] {float} Starting time for data extraction in seconds. Default: 0.0
+        :param data_time_s:   [optional] {float} Duration of data to return (e.g., 30.0) or "all". Default: "all"
+        :param downsample:    [optional] {int}   Downsampling factor. Default: 1. Warning: DEPRECATED!
+        :param zeropad:       [optional] {bool}  Set True to zeropad data. Default: False. Warning: DEPRECATED!
+        :param full_timestamps [optional]{bool}  Set True to return each sample's timestamp in output["data_headers"][seg_id]["Timestamp"]
+        :param elec_rows      [optional] {bool}  Set True (default) to return data arrays with electrodes in the rows dim (F-contiguous).
+                                                 Set False to return arrays with samples in the rows dim (C-contiguous).
+        :param force_srate    [optional] {bool}  Set True to force the data to have exactly the expected sample count in elapsed time.
+                                                 This parameter is only used with FileSpec >= 3.x with PTP timestamping.
+        :return: output:      {Dictionary} of:  data_headers: {list}        dictionaries of all data headers, 1 per segment
+                                                                            [seg_id]["Timestamp"]: timestamps of each sample in segment
+                                                                              if full_timestamps, else timestamp of first sample in segment
+                                                                            [seg_id]["NumDataPoints"]: number of samples in segment
+                                                                            [seg_id]["data_time_s"]: duration in segment
                                                 elec_ids:     {list}        elec_ids that were extracted (sorted)
                                                 start_time_s: {float}       starting time for data extraction
                                                 data_time_s:  {float}       length of time of data returned
                                                 downsample:   {int}         data downsampling factor
                                                 samp_per_s:   {float}       output data samples per second
-                                                data:         {numpy array} continuous data in a 2D numpy array
-
-        Parameters: elec_ids, start_time_s, data_time_s, and downsample are not mandatory.  Defaults will assume all
-        electrodes and all data points starting at time(0) are to be read. Data is returned as a numpy 2d array
-        with each row being the data set for each electrode (e.g. output['data'][0] for output['elec_ids'][0]).
+                                                data:         {numpy array} continuous data in a 2D elec x samps numpy array
+                                                                            (or samps x elec if elec_rows is False).
         """
-
         # Safety checks
         start_time_s = check_starttime(start_time_s)
         data_time_s = check_datatime(data_time_s)
         downsample = check_downsample(downsample)
         elec_ids = check_elecid(elec_ids)
+        if zeropad and self.basic_header["TimeStampResolution"] == 1e9:
+            print("zeropad does not work with ptp-timestamped data. Ignoring zeropad argument.\n")
+            zeropad = False
+        if force_srate and self.basic_header["TimeStampResolution"] != 1e9:
+            print("force_srate only works with ptp timestamps in filespec >= 3.x. Ignoring force_srate argument.\n")
+            force_srate = False
 
         # initialize parameters
         output = dict()
-        output["elec_ids"] = elec_ids
         output["start_time_s"] = float(start_time_s)
         output["data_time_s"] = data_time_s
         output["downsample"] = downsample
-        output["data"] = []
-        output["data_headers"] = []
+        output["elec_ids"] = []
+        output["data_headers"] = []  # List of dicts with fields Timestamp, NumDataPoints, data_time_s, BoH, BoD
+        output["data"] = []  # List of ndarrays
         output["ExtendedHeaderIndices"] = []
+        output["samp_per_s"] = self.basic_header["SampleResolution"] / self.basic_header["Period"]
 
-        datafile_samp_per_sec = (
-            self.basic_header["TimeStampResolution"] / self.basic_header["Period"]
-        )
+        # Pull some useful variables from the basic_header
         data_pt_size = self.basic_header["ChannelCount"] * DATA_BYTE_SIZE
-        elec_id_indices = []
-        front_end_idxs = []
-        analog_input_idxs = []
-        front_end_idx_cont = True
-        analog_input_idx_cont = True
-        hit_start = False
-        hit_stop = False
-        d_ptr = {"BoH": [], "BoD": [], "EoF": []}
-        # Move file position to start of datafile (if read before, may not be here anymore)
-        self.datafile.seek(self.basic_header["BytesInHeader"], 0)
+        clk_per_samp = self.basic_header["Period"] * self.basic_header["TimeStampResolution"] / self.basic_header["SampleResolution"]
+        filespec_maj, filespec_min = tuple([int(_) for _ in self.basic_header["FileSpec"].split(".")][:2])
 
-        # Based on FileSpec set other parameters
-        if self.basic_header["FileSpec"] == "2.1":
-            output["elec_ids"] = self.basic_header["ChannelID"]
-            output["data_headers"].append({})
-            output["data_headers"][0]["Timestamp"] = TIMESTAMP_NULL_21
-            output["data_headers"][0]["NumDataPoints"] = (
-                ospath.getsize(self.datafile.name) - self.datafile.tell()
-            ) // (DATA_BYTE_SIZE * self.basic_header["ChannelCount"])
-        else:
-            output["elec_ids"] = [d["ElectrodeID"] for d in self.extended_headers]
+        # Timestamp is 64-bit for filespec >= 3.0
+        ts_type, ts_size = ("<Q", 8) if filespec_maj > 2 else ("<I", 4)
 
-        # Determine start and stop index for data
-        if start_time_s == START_TIME_DEF:
-            start_idx = START_OFFSET_MIN
+        # Check requested electrode ids.
+        # We do this well before they are needed so we can fail fast if there is an error in the parameter.
+        if filespec_maj == 2 and filespec_min == 1:
+            avail_elec_ids = self.basic_header["ChannelID"]
         else:
-            start_idx = int(round(start_time_s * datafile_samp_per_sec))
-        if data_time_s == DATA_TIME_DEF:
-            stop_idx = STOP_OFFSET_MIN
+            avail_elec_ids = [d["ElectrodeID"] for d in self.extended_headers]
+        
+        if elec_ids == ELEC_ID_DEF:
+            output["elec_ids"] = avail_elec_ids
         else:
-            stop_idx = int(round((start_time_s + data_time_s) * datafile_samp_per_sec))
-
-        # If a subset of electrodes is requested, error check, determine elec indices, and reduce headers
-        if elec_ids != ELEC_ID_DEF:
-            elec_ids = check_dataelecid(elec_ids, output["elec_ids"])
+            elec_ids = check_dataelecid(elec_ids, avail_elec_ids)
             if not elec_ids:
                 return output
-            else:
-                elec_id_indices = [output["elec_ids"].index(e) for e in elec_ids]
-                output["elec_ids"] = elec_ids
+            output["elec_ids"] = elec_ids
         num_elecs = len(output["elec_ids"])
+        
+        # Measure file size
+        self.datafile.seek(self.basic_header["BytesInHeader"], 0)  # Reset to end of header / start of data
+        eoh = self.datafile.tell()
+        self.datafile.seek(0, 2)
+        eof = self.datafile.tell()
 
-        # Determine extended header indices and idx for Front End vs. Analog Input channels
-        if self.basic_header["FileSpec"] != "2.1":
-            for i in range(num_elecs):
-                idx = next(
-                    item
-                    for (item, d) in enumerate(self.extended_headers)
-                    if d["ElectrodeID"] == output["elec_ids"][i]
-                )
-                output["ExtendedHeaderIndices"].append(idx)
-
-                if self.extended_headers[idx]["PhysicalConnector"] < 5:
-                    front_end_idxs.append(i)
-                else:
-                    analog_input_idxs.append(i)
-
-            # Determine if front_end_idxs and analog_idxs are contiguous (default = False)
-            if any(np.diff(np.array(front_end_idxs)) != 1):
-                front_end_idx_cont = False
-            if any(np.diff(np.array(analog_input_idxs)) != 1):
-                analog_input_idx_cont = False
-
-        # Pre-allocate output data based on data packet info (timestamp + num pts) and/or data_time_s
-        # 1) Determine number of samples in all data packets to set possible number of output pts
-        # 1a) For file spec > 2.1, get to last data packet quickly to determine total possible output length
-        # 2) If possible output length is bigger than requested, set output based on requested
-        if self.basic_header["FileSpec"] == "2.1":
+        # Quick scan - get data headers and lazy-load data
+        self.datafile.seek(eoh, 0)  # Reset back to end of header
+        if filespec_maj == 2 and filespec_min == 1:
+            # Assume 1 segment
             timestamp = TIMESTAMP_NULL_21
-            num_data_pts = output["data_headers"][0]["NumDataPoints"]
-        else:
-            ptpfix = False
-            eoh = self.datafile.tell()
-            self.datafile.seek(0, 2)
-            eof = self.datafile.tell()
-            PacketSize = 1 + 8 + 4 + self.basic_header["ChannelCount"] * 2
-            npackets = int((eof - eoh) / PacketSize)
-            self.datafile.seek(eoh, 0)
-            datapointtest = np.ndarray(
-                (npackets,),
-                '<I',
-                self.datafile.read(),
-                calcsize('b') + calcsize('<Q'),
-                PacketSize,
+            num_data_pts = (eof - eoh) // data_pt_size,
+            output["data_headers"].append({
+                "Timestamp": timestamp,
+                "NumDataPoints": num_data_pts,
+                "data_time_s": None,  # TODO: provide duration in this segment.
+            })
+            output["data"].append(
+                np.memmap(
+                    self.datafile,
+                    dtype=np.int16,
+                    mode="r",
+                    offset=eoh,
+                    shape=(num_data_pts, self.basic_header["ChannelCount"])
+                )
             )
-            self.datafile.seek(eoh, 0)
-            if sum(datapointtest) == len(datapointtest):
-                ptpfix = True
-            if not ptpfix:
+        else:
+            # Each segment has 1 byte for 0x01 (always), 8 bytes for uint64 timestamp, 4 bytes for uint32 N data points,
+            # then 2 bytes per channel-sample.
+
+            # We first need to check if we have a single sample per packet, as in newer PTP-enabled data formats.
+            ptp_dt = [
+                ("reserved", "uint8"),
+                ("timestamps", "uint64"),
+                ("num_data_points", "uint32"),
+                ("samples", "int16", self.basic_header["ChannelCount"])
+            ]
+            samp_per_pkt = False
+            if filespec_maj >= 3:
+                # Starty by assuming that these files are from firmware >= 7.6 thus we have 1 sample per packet.
+                npackets = int((eof - eoh) / np.dtype(ptp_dt).itemsize)
+                struct_arr = np.memmap(self.datafile, dtype=ptp_dt, shape=npackets, offset=eoh, mode="r")
+                samp_per_pkt = np.all(struct_arr["num_data_points"] == 1)  # Confirm 1 sample per packet
+
+            if not samp_per_pkt:
+                # Multiple samples per packet; 1 packet == 1 uninterrupted segment.
                 while self.datafile.tell() < ospath.getsize(self.datafile.name):
-                    d_ptr["BoH"].append(self.datafile.tell())
-                    self.datafile.seek(1, 1)
-                    if self.basic_header["FileSpec"] == "3.0":
-                        timestamp = unpack("<Q", self.datafile.read(8))[0]
-                    else:
-                        timestamp = unpack("<I", self.datafile.read(4))[0]
+                    # boh = self.datafile.tell()  # Beginning of segment header
+                    self.datafile.seek(1, 1)  # Skip the reserved 0x01
+                    timestamp = unpack(ts_type, self.datafile.read(ts_size))[0]
                     num_data_pts = unpack("<I", self.datafile.read(4))[0]
-                    datalength = num_data_pts * self.basic_header["Period"] / self.basic_header["TimeStampResolution"]
-                    d_ptr["BoD"].append(self.datafile.tell())
-                    output["data_headers"].append(
-                        {"Timestamp": timestamp, "NumDataPoints": num_data_pts, "data_time_s": datalength}
-                    )
-                    self.datafile.seek(
-                        num_data_pts * self.basic_header["ChannelCount"] * DATA_BYTE_SIZE, 1
-                    )
+                    timestamp = timestamp + (clk_per_samp * np.arange(num_data_pts)).astype(np.int64 if ts_size==8 else np.int32)
+                    bod = self.datafile.tell()  # Beginning of segment data
+                    output["data_headers"].append({
+                        "Timestamp": timestamp,
+                        "NumDataPoints": num_data_pts,
+                        "data_time_s": num_data_pts / output["samp_per_s"]
+                    })
+                    output["data"].append(np.memmap(
+                        self.datafile,
+                        dtype="int16",
+                        mode="r",
+                        offset=bod,
+                        shape=(num_data_pts, self.basic_header["ChannelCount"]),
+                        order="C"
+                    ))
+                    # Seek to next segment. memmap does not move the pointer.
+                    self.datafile.seek(num_data_pts * data_pt_size, 1)
             else:
-                self.datafile.seek(eoh, 0)
-                rawdata = self.datafile.read()
-                timestamps = np.ndarray(
-                    (npackets, ),
-                    '<Q',
-                    rawdata,
-                    calcsize('<b'),
-                    PacketSize,
-                )
-                datapoints = np.ndarray(
-                    (npackets, ),
-                    '<I',
-                    rawdata,
-                    calcsize('b')+calcsize('<Q'),
-                    PacketSize,
-                )
-                output["data_headers"].append(
-                    {"Timestamp": timestamps, "NumDataPoints": datapoints}
-                )
-                output["data"].append(
-                    np.ndarray(
-                        (num_elecs, npackets),
-                        '<h',
-                        rawdata,
-                        calcsize('b')+calcsize('<Q')+calcsize('<I'),
-                        (calcsize('<h'), PacketSize),
-                    )
-                )
-                output['data_time_s'] = (timestamps[-1] - timestamps[0]) / self.basic_header['TimeStampResolution']
+                # 1 sample per packet. Reuse struct_arr.
+                seg_thresh_clk = 2 * clk_per_samp
+                seg_starts = np.hstack((0, 1 + np.argwhere(np.diff(struct_arr["timestamps"]) > seg_thresh_clk).flatten()))
+                for seg_ix, seg_start_idx in enumerate(seg_starts):
+                    seg_stop_idx = seg_starts[seg_ix + 1] if seg_ix < (len(seg_starts) - 1) else (len(struct_arr) - 1)
+                    offset = eoh + seg_start_idx * struct_arr.dtype.itemsize
+                    num_data_pts = seg_stop_idx - seg_start_idx
+                    seg_struct_arr = np.memmap(self.datafile, dtype=ptp_dt, shape=num_data_pts, offset=offset, mode="r")
+                    output["data_headers"].append({
+                        "Timestamp": seg_struct_arr["timestamps"],
+                        "NumDataPoints": num_data_pts,
+                        "data_time_s": num_data_pts / output["samp_per_s"]
+                    })
+                    output["data"].append(seg_struct_arr["samples"])
 
+        ## Post-processing ##
 
-        # stop_idx_output = ceil(timestamp / self.basic_header['Period']) + num_data_pts
-        # if data_time_s != DATA_TIME_DEF and stop_idx < stop_idx_output:  stop_idx_output = stop_idx
-        # total_samps = int(ceil((stop_idx_output - start_idx) / downsample))
-        for x in range(len(output["data_headers"])):
-            try:
-                output["data_headers"][x]["NumDataPoints"] != 1
-                if (
-                    output["data_headers"][x]["NumDataPoints"]
-                    * self.basic_header["ChannelCount"]
-                    * DATA_BYTE_SIZE
-                ) > DATA_PAGING_SIZE:
-                    print(
-                        "\nOutput data requested is larger than 1 GB, attempting to preallocate output now"
-                    )
-                # If data output is bigger than available, let user know this is too big and they must request at least one of:
-                # subset of electrodes, subset of data, or use savensxsubset to smaller file sizes, otherwise, pre-allocate data
-                self.datafile.seek(d_ptr["BoD"][x])
-                data_length = output["data_headers"][x]["NumDataPoints"]
-                recorded_data_bytes = data_length * num_elecs * DATA_BYTE_SIZE
-                recorded_data = self.datafile.read(recorded_data_bytes)
-                if zeropad is True:
-                    padsize = ceil(
-                        output["data_headers"][x]["Timestamp"] / self.basic_header["Period"]
-                    )
-                    data_length += padsize
-                    zero_array = bytes(np.zeros((padsize * num_elecs, 1), dtype=np.short))
+        # Drop segments that are not within the requested time window
+        ts_0 = output["data_headers"][0]["Timestamp"][0]
+        start_time_ts = start_time_s * self.basic_header["TimeStampResolution"]
+        test_start_ts = ts_0 + start_time_ts
+        test_stop_ts = np.inf  # Will update below
+        if start_time_s != START_TIME_DEF:
+            # Keep segments with at least one sample on-or-after test_start_ts
+            b_keep = [_["Timestamp"][-1] >= test_start_ts for _ in output["data_headers"]]
+            output["data_headers"] = [_ for _, b in zip(output["data_headers"], b_keep) if b]
+            output["data"] = [_ for _, b in zip(output["data"], b_keep) if b]
+        if data_time_s != DATA_TIME_DEF:
+            # Keep segments with at least one sample on-or-before test_stop_ts
+            data_time_ts = data_time_s * self.basic_header["TimeStampResolution"]
+            test_stop_ts = test_start_ts + data_time_ts
+            b_keep = [_["Timestamp"][0] <= test_stop_ts for _ in output["data_headers"]]
+            output["data_headers"] = [_ for _, b in zip(output["data_headers"], b_keep) if b]
+            output["data"] = [_ for _, b in zip(output["data"], b_keep) if b]
+        
+        # Post-process segments for start_time_s, data_time_s, zeropad
+        for ix, data_header in enumerate(output["data_headers"]):
+            data = output["data"][ix]
+            # start_time_s and data_time_s
+            b_keep = np.ones((data.shape[0],), dtype=bool)
+            if start_time_s > START_TIME_DEF and data_header["Timestamp"][0] < test_start_ts:
+                # if segment begins before test_start_ts, slice it to begin at test_start_ts.
+                b_keep &= data_header["Timestamp"] >= test_start_ts
+            if data_time_s != DATA_TIME_DEF and data_header["Timestamp"][-1] > test_stop_ts:
+                # if segment finishes after start_time_s + data_time_s, slice it to finish at start_time_s + data_time_s
+                b_keep &= data_header["Timestamp"] <= test_stop_ts
+            if np.any(~b_keep):
+                data_header["Timestamp"] = data_header["Timestamp"][b_keep]
+                data = data[b_keep]
+            
+            # zeropad: Prepend the data with zeros so its first timestamp is nsp_time=0.
+            if ix == 0 and zeropad and data_header["Timestamp"][0] != 0:
+                # Calculate how many samples we need.
+                padsize = ceil(data_header["Timestamp"][0] / self.basic_header["Period"])
+                pad_dat = np.zeros((padsize, data.shape[1]), dtype=data.dtype)
+                # Stack pad_dat in front of output["data"][ix]. Slow! Might run out of memory!
                 try:
-                    np.zeros((data_length, num_elecs), dtype=np.short)
+                    data = np.vstack((pad_dat, data))
                 except MemoryError as err:
                     err.args += (
                         " Output data size requested is larger than available memory. Use the parameters\n"
@@ -1278,258 +1284,44 @@ class NsxFile:
                         "              NsxFile.savesubsetnsx() to create subsets of the main nsx file\n",
                     )
                     raise
-                if zeropad is True:  # broken for PTP time. Generally just a bad idea to zeropad PTP-based data
-                    recorded_data = zero_array + recorded_data
-                output["data"].append(
-                    np.ndarray((data_length, num_elecs), "<h", recorded_data)
-                )
+                pad_ts = data_header["Timestamp"][0] - (clk_per_samp * np.arange(1, padsize + 1)).astype(np.int64)[::-1]
+                data_header["Timestamp"] = np.hstack((pad_ts, data_header["Timestamp"]))
 
-                output['samp_per_s'] = MAX_SAMP_PER_S / self.basic_header['Period']
-            except:
-                if (
-                    len(output["data_headers"][x]["NumDataPoints"])
-                    * self.basic_header["ChannelCount"]
-                    * DATA_BYTE_SIZE
-                ) > DATA_PAGING_SIZE:
-                    print(
-                        "\nOutput data requested is larger than 1 GB, attempting to preallocate output now"
-                    )
+            # force_srate: Force the returned arrays to have exactly the expected number of samples per elapsed ptp time.
+            if force_srate:
+                # Dur of segment in ts-clks (nanoseconds)
+                seg_clks = data_header["Timestamp"][-1] - data_header["Timestamp"][0] + np.uint64(clk_per_samp)
+                # Number of samples in segment
+                npoints = data.shape[0]
+                # Expected number of samples based on duration.
+                n_expected = seg_clks / clk_per_samp
+                # How many are we missing? -ve number means we have too many.
+                n_insert = int(np.round(n_expected - npoints))
+                # identify where in the segments the data should be added/removed
+                insert_inds = np.linspace(0, npoints, num=abs(n_insert) + 1, endpoint=False, dtype=int)[1:]
+                if n_insert > 0:
+                    # Create samples for the middle of the N largest gaps then insert.
+                    insert_vals = (data[insert_inds] + data[insert_inds + 1]) / 2
+                    data = np.insert(data, insert_inds, insert_vals, axis=0)
+                elif n_insert < 0:
+                    data = np.delete(data, insert_inds, axis=0)
+                
+                # Replace data_header["Timestamp"] with ideal timestamps
+                data_header["Timestamp"] = data_header["Timestamp"][0] + (clk_per_samp * np.arange(data.shape[0])).astype(np.int64)
+                
+            if downsample > 1:
+                data = data[::downsample]
 
-            # Reset file position to start of data header #1, loop through all data packets, process header, and add data
-        #     self.datafile.seek(self.basic_header['BytesInHeader'], 0)
-        #     while not hit_stop:
-        #
-        #     # Read header, check to make sure the header is valid (ie Header field != 0).  There is currently a
-        #     # bug with the NSP where pausing creates a 0 sample packet before the next real data packet, these need to
-        #     # be skipped, including any tiny packets that have less samples than downsample
-        #     if self.basic_header['FileSpec'] != '2.1':
-        #         output['data_headers'].append(processheaders(self.datafile, nsx_header_dict['data']))
-        #         if output['data_headers'][-1]['Header'] == 0:  print('Invalid Header.  File may be corrupt')
-        #         if output['data_headers'][-1]['NumDataPoints'] < downsample:
-        #             self.datafile.seek(self.basic_header['ChannelCount'] * output['data_headers'][-1]['NumDataPoints']
-        #                                * DATA_BYTE_SIZE, 1)
-        #             continue
-        #
-        #     # Determine sample value for current packet timestamp
-        #     # timestamp_sample = int(round(output['data_headers'][-1]['Timestamp'] / self.basic_header['Period']))
-        #
-        #     # For now, we need a patch for file sync which syncs 2 NSP clocks, starting a new data packet which
-        #     # may be backwards in time wrt the end of data packet 1.  Thus, when this happens, we need to treat
-        #     # data packet 2 as if it was 1, and start this process over.
-        #     if timestamp_sample < d_ptr:
-        #         d_ptr = 0
-        #         hit_start = False
-        #         output['data_headers'] = []
-        #         self.datafile.seek(-9, 1)
-        #         continue
-        #
-        #     # Check to see if stop index is before the first data packet
-        #     if len(output['data_headers']) == 1 and (STOP_OFFSET_MIN < stop_idx < timestamp_sample):
-        #         print("\nData requested is before any data was saved, which starts at t = {0:.6f} s".format(
-        #             output['data_headers'][0]['Timestamp'] / self.basic_header['TimeStampResolution']))
-        #         return
-        #
-        #     # For the first data packet to be read
-        #     if not hit_start:
-        #
-        #         # Check for starting point of data request
-        #         start_offset = start_idx - timestamp_sample
-        #
-        #         # If start_offset is outside of this packet, skip the current packet
-        #         # if we've reached the end of file, break, otherwise continue to next packet
-        #         if start_offset > output['data_headers'][-1]['NumDataPoints']:
-        #             self.datafile.seek(output['data_headers'][-1]['NumDataPoints'] * data_pt_size, 1)
-        #             if self.datafile.tell() == ospath.getsize(self.datafile.name): break
-        #             else: continue
-        #
-        #         else:
-        #             # If the start_offset is before the current packet, check to ensure that stop_index
-        #             # is not also in the paused area, then create padded data for during pause time
-        #             if start_offset < 0:
-        #                 if STOP_OFFSET_MIN < stop_idx < timestamp_sample:
-        #                     print("\nBecause of pausing, data section requested is during pause period")
-        #                     return
-        #                 else:
-        #                     print("\nFirst data packet requested begins at t = {0:.6f} s, "
-        #                           "initial section padded with zeros".format(
-        #                            output['data_headers'][-1]['Timestamp'] / self.basic_header['TimeStampResolution']))
-        #                     start_offset = START_OFFSET_MIN
-        #                     d_ptr        = (timestamp_sample - start_idx) // downsample
-        #             hit_start = True
-        #
-        #     # for all other packets
-        #     else:
-        #         # check to see if padded data is needed, including hitting the stop index
-        #         if STOP_OFFSET_MIN < stop_idx < timestamp_sample:
-        #             print("\nSection padded with zeros due to file pausing")
-        #             hit_stop = True;  break
-        #
-        #         elif (timestamp_sample - start_idx) > d_ptr:
-        #             print("\nSection padded with zeros due to file pausing")
-        #             start_offset = START_OFFSET_MIN
-        #             d_ptr        = (timestamp_sample - start_idx) // downsample
-        #
-        #     # Set number of samples to be read based on if start/stop sample is during data packet
-        #     if STOP_OFFSET_MIN < stop_idx <= (timestamp_sample + output['data_headers'][-1]['NumDataPoints']):
-        #         total_pts = stop_idx - timestamp_sample - start_offset
-        #         hit_stop = True
-        #     else:
-        #         total_pts = output['data_headers'][-1]['NumDataPoints'] - start_offset
-        #
-        #     # Need current file position because memory map will reset file position
-        #     curr_file_pos = self.datafile.tell()
-        #
-        #     # Determine starting position to read from memory map
-        #     file_offset = int(curr_file_pos + start_offset * data_pt_size)
-        #
-        #     # Extract data no more than 1 GB at a time (or based on DATA_PAGING_SIZE)
-        #     # Determine shape of data to map based on file sizing and position, then map it
-        #     downsample_data_size = data_pt_size * downsample
-        #     max_length           = (DATA_PAGING_SIZE // downsample_data_size) * downsample_data_size
-        #     num_loops            = int(ceil(total_pts * data_pt_size / max_length))
-        #
-        #     for loop in range(num_loops):
-        #         if loop == 0:
-        #             if num_loops == 1:  num_pts = total_pts
-        #             else:               num_pts = max_length // data_pt_size
-        #
-        #         else:
-        #             file_offset += max_length
-        #             if loop == (num_loops - 1):  num_pts = ((total_pts * data_pt_size) % max_length) // data_pt_size
-        #             else:                        num_pts = max_length // data_pt_size
-        #
-        #         if num_loops != 1:  print('Data extraction requires paging: {0} of {1}'.format(loop + 1, num_loops))
-        #
-        #         num_pts = int(num_pts)
-        #         shape   = (num_pts, self.basic_header['ChannelCount'])
-        #         mm      = np.memmap(self.datafile, dtype=np.int16, mode='r', offset=file_offset, shape=shape)
-        #
-        #         # append data based on downsample slice and elec_ids indexing, then clear memory map
-        #         if downsample != 1: mm = mm[::downsample]
-        #         if elec_id_indices:
-        #             output['data'][d_ptr:d_ptr + mm.shape[0]] = np.array(mm[:, elec_id_indices]).astype(np.float32)
-        #         else:
-        #             output['data'][d_ptr:d_ptr + mm.shape[0]] = np.array(mm).astype(np.float32)
-        #         d_ptr += mm.shape[0]
-        #         del mm
-        #
-        #     # Reset current file position for file position checking and possibly next header
-        #     curr_file_pos += self.basic_header['ChannelCount'] * output['data_headers'][-1]['NumDataPoints'] \
-        #                      * DATA_BYTE_SIZE
-        #     self.datafile.seek(curr_file_pos, 0)
-        #     if curr_file_pos == ospath.getsize(self.datafile.name):  hit_stop = True
-        #
-        # # Safety checks for start and stop times
-        # if not hit_stop and start_idx > START_OFFSET_MIN:
-        #     raise Exception('Error: End of file found before start_time_s')
-        # elif not hit_stop and stop_idx:
-        #     print("\n*** WARNING: End of file found before stop_time_s, returning all data in file")
-        #
-        # # Transpose the data so that it has entries based on each electrode, not each sample time
-        # output['data'] = output['data'].transpose()
-        #
-        # # All data must be scaled based on scaling factors from extended header
-        # if self.basic_header['FileSpec'] == '2.1':  output['data'] *= UV_PER_BIT_21
-        # else:
-        #     if front_end_idxs:
-        #         if front_end_idx_cont:
-        #             output['data'][front_end_idxs[0]:front_end_idxs[-1] + 1] *= \
-        #                 getdigfactor(self.extended_headers, output['ExtendedHeaderIndices'][front_end_idxs[0]])
-        #         else:
-        #             for i in front_end_idxs:
-        #                 output['data'][i] *= getdigfactor(self.extended_headers, output['ExtendedHeaderIndices'][i])
-        #
-        #     if analog_input_idxs:
-        #         if analog_input_idx_cont:
-        #             output['data'][analog_input_idxs[0]:analog_input_idxs[-1] + 1] *= \
-        #                 getdigfactor(self.extended_headers, output['ExtendedHeaderIndices'][analog_input_idxs[0]])
-        #         else:
-        #             for i in analog_input_idxs:
-        #                 output['data'][i] *= getdigfactor(self.extended_headers, output['ExtendedHeaderIndices'][i])
-        #
-        # # Update parameters based on data extracted
-        # output['samp_per_s']  = float(datafile_samp_per_sec / downsample)
-        # output['data_time_s'] = len(output['data'][0]) / output['samp_per_s']
+            data_header["NumDataPoints"] = data.shape[0]
+            data_header["data_time_s"] = data_header["NumDataPoints"] / output["samp_per_s"]
 
-        return output
+            if elec_rows:
+                data = data.T
 
-    def getaligneddata(
-            self,
-            elec_ids="all",
-            start_time_s=0,
-            data_time_s="all",
-            downsample=1,
-            zeropad=False,
-            ):
-        """
-        getaligneddata() has the same syntax as getdata(). It uses the PTP timestamps in the data to align to the
-        expected sampling rate of the file. getaligneddata() also resegments the data.
-        getaligneddata() will throw an error if the file does not have a timestamp for each data segment.
-        :param elec_ids:      [optional] {list}  List of elec_ids to extract (e.g., [13])
-        :param start_time_s:  [optional] {float} Starting time for data extraction (e.g., 1.0)
-        :param data_time_s:   [optional] {float} Length of time of data to return (e.g., 30.0)
-        :param downsample:    [optional] {int}   Downsampling factor (e.g., 2)
-        :return: output:      {Dictionary} of:  data_headers: {list}        dictionaries of all data headers
-                                                elec_ids:     {list}        elec_ids that were extracted (sorted)
-                                                start_time_s: {float}       starting time for data extraction
-                                                data_time_s:  {float}       length of time of data returned
-                                                downsample:   {int}         data downsampling factor
-                                                samp_per_s:   {float}       output data samples per second
-                                                data:         {numpy array} continuous data in a 2D numpy array
+            output["data"][ix] = data
 
-        Parameters: elec_ids, start_time_s, data_time_s, and downsample are not mandatory.  Defaults will assume all
-        electrodes and all data points starting at time(0) are to be read. Data is returned as a numpy 2d array
-        with each row being the data set for each electrode (e.g. output['data'][0] for output['elec_ids'][0]).
-        """
-
-        nsx = self.getdata(elec_ids, start_time_s, data_time_s, downsample, zeropad)
-        try:
-            len(nsx['data_headers'][0]['NumDataPoints']) != sum(nsx['data_headers'][0]['NumDataPoints'])
-        except Exception as err:
-            print(self.datafile.name, 'does not need to be aligned. Use getdata() instead.')
-            raise SystemExit(err)
-
-        # initialize parameters
-        output = dict()
-        output["elec_ids"] = nsx['elec_ids']
-        output["start_time_s"] = nsx["start_time_s"]
-        output["data_time_s"] = nsx['data_time_s']
-        output["downsample"] = nsx['downsample']
-        output["data"] = []
-        output["data_headers"] = {'Timestamp': [], 'NumDataPoints': []}
-        output["ExtendedHeaderIndices"] = []
-        ts_all = nsx['data_headers'][0]['Timestamp']
-        # Find segments and generate them into lists
-        ts_diff = np.diff(ts_all)
-        ts_diff = np.insert(ts_diff, 0, ts_diff[0])
-        segmentinds = np.argwhere(ts_diff > 2 * self.basic_header['TimeStampResolution'] / MAX_SAMP_PER_S * self.basic_header['Period'])
-        segmentinds = np.insert(segmentinds, 0, 0)
-        segmentinds = np.append(segmentinds, len(ts_all)-1)
-        segments = [[segmentinds[x], segmentinds[x+1]-1] for x in range(len(segmentinds)-1)]
-
-        # In all identified segments, find the number of frames to add/remove
-        for s in range(len(segments)):
-            tempdata = nsx['data'][0][:, range(segments[s][0], segments[s][1])]
-            dur = np.diff(ts_all[segments[s]])
-            npoints = int(np.diff(segments[s]))
-            alignRatio = dur / npoints / self.basic_header['TimeStampResolution'] * MAX_SAMP_PER_S / self.basic_header['Period']
-            addedsamples = int(np.round((alignRatio - 1) * np.diff(segments[s]), 0))
-            gap = int(npoints / abs(addedsamples))
-
-            # identify where in the segments the data should be added or removed
-            intervals = [int(npoints - gap/2 - x*gap) for x in range(abs(addedsamples))]
-            if addedsamples > 1:
-                for x in intervals:
-                    tempdata = np.insert(tempdata, x, tempdata[:, x], 1)
-            elif addedsamples < 1:
-                for x in intervals:
-                    tempdata = np.remove(tempdata, x, tempdata[:, x], 1)
-
-            # Regenerate the output
-            output['data'].append(tempdata)
-            output['data_headers']['Timestamp'].append(ts_all[segments[s][0]])
-            output['data_headers']['NumDataPoints'].append(int(npoints + addedsamples))
-
+            if not full_timestamps:
+                data_header["Timestamp"] = data_header["Timestamp"][0]
 
         return output
 
