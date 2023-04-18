@@ -1161,11 +1161,11 @@ class NsxFile:
         if filespec_maj == 2 and filespec_min == 1:
             # Assume 1 segment
             timestamp = TIMESTAMP_NULL_21
-            num_data_pts = (eof - eoh) // data_pt_size,
+            num_data_pts = (eof - eoh) // data_pt_size
             output["data_headers"].append({
                 "Timestamp": timestamp,
                 "NumDataPoints": num_data_pts,
-                "data_time_s": None,  # TODO: provide duration in this segment.
+                "data_time_s": num_data_pts / output["samp_per_s"],
             })
             output["data"].append(
                 np.memmap(
