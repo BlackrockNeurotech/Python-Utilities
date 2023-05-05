@@ -1009,7 +1009,7 @@ class NevFile:
         
     # add "enter" and "exit" methods for compatibility with "with":
     def __enter__(self):
-        pass
+        return self
     
     def __exit__(self,*args):
         self.close()
@@ -1736,7 +1736,7 @@ class NsxFile:
         
     # add "enter" and "exit" methods for compatibility with "with":
     def __enter__(self):
-        pass
+        return self
     
     def __exit__(self,*args):
         self.close()
