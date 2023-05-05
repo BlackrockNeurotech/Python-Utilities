@@ -507,7 +507,10 @@ class NevFile:
         self.datafile = datafile
         self.basic_header = {}
         self.extended_headers = []
-
+        
+        self.openfile()
+        
+    def openfile(self):
         # Run openfilecheck and open the file passed or allow user to browse to one
         self.datafile = openfilecheck(
             "rb",
@@ -1003,6 +1006,13 @@ class NevFile:
         name = self.datafile.name
         self.datafile.close()
         print("\n" + name.split("/")[-1] + " closed")
+        
+    # add "enter" and "exit" methods for compatibility with "with":
+    def __enter__(self):
+        pass
+    
+    def __exit__(self,*args):
+        self.close()
 
 
 class NsxFile:
@@ -1016,7 +1026,10 @@ class NsxFile:
         self.datafile = datafile
         self.basic_header = {}
         self.extended_headers = []
-
+        
+        self.openfile()
+        
+    def openfile(self):
         # Run openfilecheck and open the file passed or allow user to browse to one
         self.datafile = openfilecheck(
             "rb",
@@ -1720,3 +1733,10 @@ class NsxFile:
         name = self.datafile.name
         self.datafile.close()
         print("\n" + name.split("/")[-1] + " closed")
+        
+    # add "enter" and "exit" methods for compatibility with "with":
+    def __enter__(self):
+        pass
+    
+    def __exit__(self,*args):
+        self.close()
