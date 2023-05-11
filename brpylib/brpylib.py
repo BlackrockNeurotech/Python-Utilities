@@ -1191,6 +1191,7 @@ class NsxFile:
                 # Starty by assuming that these files are from firmware >= 7.6 thus we have 1 sample per packet.
                 npackets = int((eof - eoh) / np.dtype(ptp_dt).itemsize)
                 struct_arr = np.memmap(self.datafile, dtype=ptp_dt, shape=npackets, offset=eoh, mode="r")
+                self.datafile.seek(eoh, 0)  # Reset to end-of-header in case memmap moved the pointer.
                 samp_per_pkt = np.all(struct_arr["num_data_points"] == 1)  # Confirm 1 sample per packet
 
             if not samp_per_pkt:
