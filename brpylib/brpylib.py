@@ -28,7 +28,7 @@ v2.0.0 - 04/27/2021 - numpy-based architecture rebuild of NevFile.getdata()
 v2.0.1 - 11/12/2021 - fixed indexing error in NevFile.getdata()
                       Added numpy architecture to NsxFile.getdata()
 v2.0.2 - 03/21/2023 - added logic to NsxFile.getdata() for where PTP timestamps are applied to every continuous sample
-                      created method 'getaligneddata' in class NsxFile
+v2.0.3 - 05/11/2023 - Fixed bug with memmap and file.seek                      
 """
 
 
@@ -45,7 +45,7 @@ import numpy as np
 from .brMiscFxns import brmiscfxns_ver, openfilecheck
 
 # Version control set/check
-brpylib_ver = "2.0.2"
+brpylib_ver = "2.0.3"
 brmiscfxns_ver_req = "1.2.0"
 if brmiscfxns_ver.split(".") < brmiscfxns_ver_req.split("."):
     raise Exception(
