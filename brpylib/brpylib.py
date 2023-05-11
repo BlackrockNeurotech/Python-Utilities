@@ -1215,8 +1215,9 @@ class NsxFile:
                         shape=(num_data_pts, self.basic_header["ChannelCount"]),
                         order="C"
                     ))
-                    # Seek to next segment. memmap does not move the pointer.
-                    self.datafile.seek(num_data_pts * data_pt_size, 1)
+                    if self.datafile.tell() == bod:
+                        # It seems inconsistent across numpy versions whether memmap moves the pointer.
+                        self.datafile.seek(num_data_pts * data_pt_size, 1)
             else:
                 # 1 sample per packet. Reuse struct_arr.
                 seg_thresh_clk = 2 * clk_per_samp
