@@ -1123,7 +1123,6 @@ class NsxFile:
         output["elec_ids"] = []
         output["data_headers"] = []  # List of dicts with fields Timestamp, NumDataPoints, data_time_s, BoH, BoD
         output["data"] = []  # List of ndarrays
-        output["ExtendedHeaderIndices"] = []
         output["samp_per_s"] = self.basic_header["SampleResolution"] / self.basic_header["Period"]
 
         # Pull some useful variables from the basic_header
