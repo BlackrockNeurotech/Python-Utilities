@@ -1196,7 +1196,7 @@ class NsxFile:
 
             if not samp_per_pkt:
                 # Multiple samples per packet; 1 packet == 1 uninterrupted segment.
-                while self.datafile.tell() < ospath.getsize(self.datafile.name):
+                while 0 < self.datafile.tell() < ospath.getsize(self.datafile.name):
                     # boh = self.datafile.tell()  # Beginning of segment header
                     self.datafile.seek(1, 1)  # Skip the reserved 0x01
                     timestamp = unpack(ts_type, self.datafile.read(ts_size))[0]
