@@ -28,7 +28,7 @@ v2.0.0 - 04/27/2021 - numpy-based architecture rebuild of NevFile.getdata()
 v2.0.1 - 11/12/2021 - fixed indexing error in NevFile.getdata()
                       Added numpy architecture to NsxFile.getdata()
 v2.0.2 - 03/21/2023 - added logic to NsxFile.getdata() for where PTP timestamps are applied to every continuous sample
-                      created method 'getaligneddata' in class NsxFile
+v2.0.3 - 05/11/2023 - Fixed bug with memmap and file.seek                      
 """
 
 
@@ -45,7 +45,7 @@ import numpy as np
 from .brMiscFxns import brmiscfxns_ver, openfilecheck
 
 # Version control set/check
-brpylib_ver = "2.0.2"
+brpylib_ver = "2.0.3"
 brmiscfxns_ver_req = "1.2.0"
 if brmiscfxns_ver.split(".") < brmiscfxns_ver_req.split("."):
     raise Exception(
@@ -1123,7 +1123,6 @@ class NsxFile:
         output["elec_ids"] = []
         output["data_headers"] = []  # List of dicts with fields Timestamp, NumDataPoints, data_time_s, BoH, BoD
         output["data"] = []  # List of ndarrays
-        output["ExtendedHeaderIndices"] = []
         output["samp_per_s"] = self.basic_header["SampleResolution"] / self.basic_header["Period"]
 
         # Pull some useful variables from the basic_header
@@ -1192,11 +1191,12 @@ class NsxFile:
                 # Starty by assuming that these files are from firmware >= 7.6 thus we have 1 sample per packet.
                 npackets = int((eof - eoh) / np.dtype(ptp_dt).itemsize)
                 struct_arr = np.memmap(self.datafile, dtype=ptp_dt, shape=npackets, offset=eoh, mode="r")
+                self.datafile.seek(eoh, 0)  # Reset to end-of-header in case memmap moved the pointer.
                 samp_per_pkt = np.all(struct_arr["num_data_points"] == 1)  # Confirm 1 sample per packet
 
             if not samp_per_pkt:
                 # Multiple samples per packet; 1 packet == 1 uninterrupted segment.
-                while self.datafile.tell() < ospath.getsize(self.datafile.name):
+                while 0 < self.datafile.tell() < ospath.getsize(self.datafile.name):
                     # boh = self.datafile.tell()  # Beginning of segment header
                     self.datafile.seek(1, 1)  # Skip the reserved 0x01
                     timestamp = unpack(ts_type, self.datafile.read(ts_size))[0]
@@ -1216,8 +1216,9 @@ class NsxFile:
                         shape=(num_data_pts, self.basic_header["ChannelCount"]),
                         order="C"
                     ))
-                    # Seek to next segment. memmap does not move the pointer.
-                    self.datafile.seek(num_data_pts * data_pt_size, 1)
+                    if self.datafile.tell() == bod:
+                        # It seems inconsistent across numpy versions whether memmap moves the pointer.
+                        self.datafile.seek(num_data_pts * data_pt_size, 1)
             else:
                 # 1 sample per packet. Reuse struct_arr.
                 seg_thresh_clk = 2 * clk_per_samp
