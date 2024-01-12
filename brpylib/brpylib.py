@@ -1381,7 +1381,7 @@ class NsxFile:
                 print(
                     "\nWARNING: Only one of file_size or file_time_s can be passed, defaulting to file_time_s."
                 )
-            file_size = int(
+            data_size = int(
                 num_elecs
                 * DATA_BYTE_SIZE
                 * file_time_s
@@ -1389,9 +1389,9 @@ class NsxFile:
                 / self.basic_header["Period"]
             )
             if self.basic_header["FileSpec"] == "2.1":
-                file_size += 32 + 4 * num_elecs
+                file_size = 32 + 4 * num_elecs + data_size
             else:
-                file_size += (
+                file_size = data_size + ( # estimate each file size with header
                     NSX_BASIC_HEADER_BYTES_22 + NSX_EXT_HEADER_BYTES_22 * num_elecs + 5
                 )
             print(
@@ -1401,6 +1401,12 @@ class NsxFile:
             )
         elif file_size:
             file_size = check_filesize(file_size)
+            if self.basic_header["FileSpec"] == "2.1":
+                data_size = file_size - 32 + 4 * num_elecs
+            else:
+                data_size = file_size - ( # estimate each file size with header
+                    NSX_BASIC_HEADER_BYTES_22 + NSX_EXT_HEADER_BYTES_22 * num_elecs + 5
+                )
 
         # Create and open subset file as writable binary, if it already exists ask user for overwrite permission
         file_name, file_ext = ospath.splitext(self.datafile.name)
@@ -1474,7 +1480,7 @@ class NsxFile:
                 ) / (DATA_BYTE_SIZE * self.basic_header["ChannelCount"])
             else:
                 header_binary = self.datafile.read(1)
-                timestamp_binary = self.datafile.read(4)
+                timestamp_binary = self.datafile.read(8) # version 7 update uint32 to uint64
                 packet_pts_binary = self.datafile.read(4)
                 packet_pts = unpack("<I", packet_pts_binary)[0]
                 if packet_pts == 0:
@@ -1488,7 +1494,7 @@ class NsxFile:
             datafile_pos = self.datafile.tell()
             file_offset = datafile_pos
             mm_length = (
-                DATA_PAGING_SIZE // datafile_datapt_size
+                data_size // datafile_datapt_size
             ) * datafile_datapt_size
             num_loops = int(ceil(packet_pts * datafile_datapt_size / mm_length))
             packet_read_pts = 0
@@ -1574,7 +1580,7 @@ class NsxFile:
                             subset_file.write(prior_file.read(bytes_in_headers))
                             subset_file.write(header_binary)
                             timestamp_new = (
-                                unpack("<I", timestamp_binary)[0]
+                                unpack("<Q", timestamp_binary)[0]  # version 7 update uint32 to uint64
                                 + (packet_read_pts + pts_can_add)
                                 * self.basic_header["Period"]
                             )
