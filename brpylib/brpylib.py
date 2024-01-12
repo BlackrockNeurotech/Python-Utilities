@@ -1216,9 +1216,15 @@ class NsxFile:
                         shape=(num_data_pts, self.basic_header["ChannelCount"]),
                         order="C"
                     ))
-                    if self.datafile.tell() == bod:
-                        # It seems inconsistent across numpy versions whether memmap moves the pointer.
-                        self.datafile.seek(num_data_pts * data_pt_size, 1)
+                    # memmap moves the file pointer inconsistently depending on platform and numpy version
+                    curr_loc = self.datafile.tell()
+                    expected_loc = bod + num_data_pts * data_pt_size
+                    if curr_loc == bod:
+                        # It did not move the pointer at all. Move it manually.
+                        self.datafile.seek(expected_loc - bod, 1)
+                    elif curr_loc > expected_loc:
+                        # Moved it too far (probably to end of file); move manually from beginning to expected.
+                        self.datafile.seek(expected_loc, 0)
             else:
                 # 1 sample per packet. Reuse struct_arr.
                 seg_thresh_clk = 2 * clk_per_samp
