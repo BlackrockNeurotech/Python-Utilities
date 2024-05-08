@@ -11,8 +11,12 @@ v1.2.0 - 08/04/2016 - minor modifications to allow use of Python 2.6+
 v1.3.0 - 05/08/2024 - removed Qt dependency, replaced with tkinter
 """
 from os import getcwd, path
-from tkinter import Tk
-from tkinter.filedialog import askopenfile
+try:
+    from tkinter import Tk
+    from tkinter.filedialog import askopenfile
+    HAS_TK = True
+except ModuleNotFoundError:
+    HAS_TK = False
 
 # Version control
 brmiscfxns_ver = "1.3.0"
@@ -35,6 +39,10 @@ def openfilecheck(open_mode, file_name="", file_ext="", file_type=""):
 
     while True:
         if not file_name:  # no file name passed
+            if not HAS_TK:
+                raise ModuleNotFoundError(
+                    "Tkinter required for file dialog. Install tkinter or provide file_name."
+                )
             if not file_type: # no extension passed
                 file_type = ("*.ns1", "*.ns2", "*.ns3", "*.ns4", "*.ns5", "*.ns6")
             # Ask user to specify a file path or browse

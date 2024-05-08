@@ -16,9 +16,7 @@ dynamic = ["version"]
 [project.optional-dependencies]
 dev = [
     "matplotlib",
-    "qtpy",
-    "pyside6_essentials; python_version>='3.6'",
-    "pyside2; python_version<'3.6'",
+    "tkinter",
     "jupyterlab"
 ]
 test = [
