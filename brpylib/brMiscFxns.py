@@ -65,7 +65,7 @@ def openfilecheck(open_mode, file_name="", file_ext="", file_type="", verbose=Tr
                 file_name = file_name[0]
 
         # Ensure file exists (really needed for users type entering)
-        if interactive and path.isfile(file_name):
+        if path.isfile(file_name):
             # Ensure given file matches file_ext
             if file_ext:
                 _, fext = path.splitext(file_name)
@@ -77,13 +77,16 @@ def openfilecheck(open_mode, file_name="", file_ext="", file_type="", verbose=Tr
                     test_extension = file_ext
 
                 if fext[0 : len(test_extension)] != test_extension:
-                    file_name = ""
-                    print(
-                        "\n*** File given is not a "
-                        + file_ext
-                        + " file, try again ***\n"
-                    )
-                    continue
+                    if interactive:
+                        file_name = ""
+                        print(
+                            "\n*** File given is not a "
+                            + file_ext
+                            + " file, try again ***\n"
+                        )
+                        continue
+                    else:
+                        break
             break
         else:
             file_name = ""
