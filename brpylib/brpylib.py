@@ -738,12 +738,13 @@ class NevFile:
             )
             trueCommentsidx = np.asarray(commentPackets)[trueComments]
             textComments = comments[trueCommentsidx]
-            textComments[:, -1] = "$"
-            stringarray = textComments.tostring()
-            stringvector = stringarray.decode("latin-1")
-            stringvector = stringvector[0:-1]
-            validstrings = stringvector.replace("\x00", "")
-            commentsFinal = validstrings.split("$")
+            commentsFinal = []
+            for text in textComments:
+                stringarray = text.tostring()
+                stringvector = stringarray.decode("latin-1")
+                stringvector = stringvector[0:-1]
+                validstring = stringvector.replace("\x00", "")
+                commentsFinal.append(validstring)
 
             # Remove the ROI comments from the list
             subsetInds = list(
