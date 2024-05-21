@@ -28,17 +28,19 @@ except NameError:
     pass
 
 
-def openfilecheck(open_mode, file_name="", file_ext="", file_type=""):
+def openfilecheck(open_mode, file_name="", file_ext="", file_type="", verbose=True, interactive=True):
     """
     :param open_mode: {str} method to open the file (e.g., 'rb' for binary read only)
     :param file_name: [optional] {str} full path of file to open
     :param file_ext:  [optional] {str} file extension (e.g., '.nev')
     :param file_type: [optional] {str} file type for use when browsing for file (e.g., 'Blackrock NEV Files')
+    :param verbose: [optional] {bool} whether or not to print status information
+    :param interactive: [optional] {bool} will only try to prompt user for a file if True, otherwise allow failure
     :return: {file} opened file
     """
 
     while True:
-        if not file_name:  # no file name passed
+        if interactive and not file_name:  # no file name passed
             if not HAS_QT:
                 raise ModuleNotFoundError(
                     "Qt required for file dialog. Install PySide + qtpy or provide file_name."
@@ -63,7 +65,7 @@ def openfilecheck(open_mode, file_name="", file_ext="", file_type=""):
                 file_name = file_name[0]
 
         # Ensure file exists (really needed for users type entering)
-        if path.isfile(file_name):
+        if interactive and path.isfile(file_name):
             # Ensure given file matches file_ext
             if file_ext:
                 _, fext = path.splitext(file_name)
@@ -86,8 +88,9 @@ def openfilecheck(open_mode, file_name="", file_ext="", file_type=""):
         else:
             file_name = ""
             print("\n*** File given does exist, try again ***\n")
+    if verbose:
+        print("\n" + file_name.split("/")[-1] + " opened")
 
-    print("\n" + file_name.split("/")[-1] + " opened")
     return open(file_name, open_mode)
 
 

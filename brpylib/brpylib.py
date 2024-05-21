@@ -512,7 +512,7 @@ class NevFile:
     basic header information.
     """
 
-    def __init__(self, datafile=""):
+    def __init__(self, datafile="", verbose=True, interactive=True):
         self.datafile = datafile
         self.basic_header = {}
         self.extended_headers = []
@@ -523,6 +523,8 @@ class NevFile:
             file_name=self.datafile,
             file_ext=".nev",
             file_type="Blackrock NEV Files",
+            verbose=verbose,
+            interactive=interactive
         )
 
         # extract basic header information
@@ -1020,7 +1022,7 @@ class NsxFile:
     basic header information.
     """
 
-    def __init__(self, datafile=""):
+    def __init__(self, datafile="", interactive=True, verbose=True):
 
         self.datafile = datafile
         self.basic_header = {}
@@ -1032,6 +1034,8 @@ class NsxFile:
             file_name=self.datafile,
             file_ext=".ns*",
             file_type="Blackrock NSx Files",
+            interactive=interactive,
+            verbose=verbose
         )
 
         # Determine File ID to determine if File Spec 2.1
@@ -1219,11 +1223,8 @@ class NsxFile:
                     # memmap moves the file pointer inconsistently depending on platform and numpy version
                     curr_loc = self.datafile.tell()
                     expected_loc = bod + num_data_pts * data_pt_size
-                    if curr_loc == bod:
-                        # It did not move the pointer at all. Move it manually.
-                        self.datafile.seek(expected_loc - bod, 1)
-                    elif curr_loc > expected_loc:
-                        # Moved it too far (probably to end of file); move manually from beginning to expected.
+                    if curr_loc != expected_loc:
+                        # memmap moved the cursor to an unexpected location, update it manually
                         self.datafile.seek(expected_loc, 0)
             else:
                 # 1 sample per packet. Reuse struct_arr.
