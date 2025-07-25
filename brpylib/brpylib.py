@@ -740,7 +740,7 @@ class NevFile:
             textComments = comments[trueCommentsidx]
             commentsFinal = []
             for text in textComments:
-                stringarray = text.tostring()
+                stringarray = text.decode(encoding='utf-8', errors='strict')
                 stringvector = stringarray.decode("latin-1")
                 stringvector = stringvector[0:-1]
                 validstring = stringvector.replace("\x00", "")
@@ -764,7 +764,7 @@ class NevFile:
                 nmCommentsidx = np.asarray(commentPackets)[ROIPackets]
                 nmcomments = comments[nmCommentsidx]
                 nmcomments[:, -1] = ":"
-                nmstringarray = nmcomments.tostring()
+                nmstringarray = nmcomments.decode(encoding='utf-8', errors='strict')
                 nmstringvector = nmstringarray.decode("latin-1")
                 nmstringvector = nmstringvector[0:-1]
                 nmvalidstrings = nmstringvector.replace("\x00", "")
