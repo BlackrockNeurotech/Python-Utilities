@@ -5,3 +5,5 @@ __pycache__
 .DS_Store
 *.egg-info/
 .idea
+test*
+.env*

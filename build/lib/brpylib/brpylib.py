@@ -734,7 +734,7 @@ class NevFile:
 
             # extract only the "true" comments, distinct from ROI packets
             trueComments = np.setdiff1d(
-                list(range(0, len(commentPackets))), ROIPackets
+                list(range(0, len(commentPackets) - 1)), ROIPackets
             ).astype(int)
             trueCommentsidx = np.asarray(commentPackets)[trueComments]
             textComments = comments[trueCommentsidx]
