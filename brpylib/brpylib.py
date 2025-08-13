@@ -1335,7 +1335,7 @@ class NsxFile:
         return output
 
     def savesubsetnsx(
-        self, elec_ids="all", file_size=None, file_time_s=None, file_suffix=""
+        self, elec_ids="all", file_size=None, file_time_s=None, file_suffix="", out_file=""
     ):
         """
         This function is used to save a subset of data based on electrode IDs, file sizing, or file data time.  If
@@ -1348,6 +1348,7 @@ class NsxFile:
                                                    nothing is passed, file_size will be used as default.
         :param file_suffix: [optional] {str}   Suffix to append to NSx datafile name for subset files.  If nothing is
                                                    passed, default will be "_subset".
+        :param out_file: [optional] {str}  Full path to where to save the subset file (supersedes file_suffix).
         :return: None - None of the electrodes requested exist in the data
                  SUCCESS - All file subsets extracted and saved
         """
@@ -1405,18 +1406,20 @@ class NsxFile:
             file_size = check_filesize(file_size)
 
         # Create and open subset file as writable binary, if it already exists ask user for overwrite permission
-        file_name, file_ext = ospath.splitext(self.datafile.name)
-        if file_suffix:
-            file_name += "_" + file_suffix
+        if out_file:
+            new_file_name = out_file
         else:
-            file_name += "_subset"
+            file_name, file_ext = ospath.splitext(self.datafile.name)
+            if file_suffix:
+                file_name += "_" + file_suffix
+            else:
+                file_name += "_subset"
+            new_file_name = file_name + "_000" + file_ext
 
-        if ospath.isfile(file_name + "_000" + file_ext):
+        if ospath.isfile(new_file_name):
             if "y" != input(
                 "\nFile '"
-                + file_name.split("/")[-1]
-                + "_xxx"
-                + file_ext
+                + new_file_name
                 + "' already exists, overwrite [y/n]: "
             ):
                 print("\nExiting, no overwrite, returning None")
@@ -1424,7 +1427,7 @@ class NsxFile:
             else:
                 print("\n*** Overwriting existing subset files ***")
 
-        subset_file = open(file_name + "_000" + file_ext, "wb")
+        subset_file = open(new_file_name, "wb")
         print("\nWriting subset file: " + ospath.split(subset_file.name)[1])
 
         # For file spec 2.1:
